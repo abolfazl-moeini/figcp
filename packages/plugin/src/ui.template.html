@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>figcp Bridge</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 10px 12px;
+        font-family: Inter, -apple-system, BlinkMacSystemFont, sans-serif;
+        font-size: 12px;
+        background: var(--figma-color-bg, #1e1e1e);
+        color: var(--figma-color-text, #f5f5f5);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #f59e0b;
+        flex-shrink: 0;
+      }
+      .dot.connected {
+        background: #22c55e;
+      }
+      .dot.error {
+        background: #ef4444;
+      }
+      .meta {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .status {
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .sub {
+        font-size: 10px;
+        opacity: 0.7;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      button {
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        background: transparent;
+        color: inherit;
+        border-radius: 6px;
+        padding: 4px 8px;
+        font-size: 11px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="row">
+      <div id="dot" class="dot"></div>
+      <div class="meta">
+        <div id="status" class="status">Connecting...</div>
+        <div id="sub" class="sub">127.0.0.1:__FIGCP_PORT__</div>
+      </div>
+    </div>
+    <button id="reconnect" type="button">Reconnect</button>
+
+    <script>
+      const PORT = "__FIGCP_PORT__".startsWith("__") ? "1994" : "__FIGCP_PORT__";
+      const TOKEN = "__FIGCP_TOKEN__";
+      const hasToken = TOKEN && !TOKEN.startsWith("__");
+      const dotEl = document.getElementById("dot");
+      const statusEl = document.getElementById("status");
+      const subEl = document.getElementById("sub");
+      const reconnectBtn = document.getElementById("reconnect");
+
+      let activeWs = null;
+      let connectionGen = 0;
+      let helloPayload = null;
+      let retryDelay = 1000;
+      let retryTimer = null;
+      const workerWatchdogs = new Map();
+
+      function setUi(state, text, sub) {
+        dotEl.className = "dot " + state;
+        statusEl.textContent = text;
+        if (sub) subEl.textContent = sub;
+      }
+
+      function clearWatchdogs() {
+        for (const t of workerWatchdogs.values()) {
+          clearTimeout(t);
+        }
+        workerWatchdogs.clear();
+      }
+
+      function scheduleReconnect() {
+        if (!hasToken || retryTimer) return;
+        setUi("", "Reconnecting...", "Retry in " + Math.round(retryDelay / 1000) + "s");
+        retryTimer = setTimeout(() => {
+          retryTimer = null;
+          connect();
+        }, retryDelay);
+        retryDelay = Math.min(retryDelay * 2, 5000);
+      }
+
+      function connect() {
+        if (!hasToken) {
+          setUi("error", "Setup required", "Run figcp --setup");
+          return;
+        }
+        if (activeWs && (activeWs.readyState === WebSocket.OPEN || activeWs.readyState === WebSocket.CONNECTING)) {
+          return;
+        }
+
+        const gen = ++connectionGen;
+        let socket;
+        try {
+          socket = new WebSocket("ws://127.0.0.1:" + PORT + "/ws?token=" + encodeURIComponent(TOKEN));
+        } catch (err) {
+          setUi("error", "WS Error", String(err));
+          scheduleReconnect();
+          return;
+        }
+        activeWs = socket;
+
+        socket.onopen = () => {
+          if (gen !== connectionGen) {
+            socket.close();
+            return;
+          }
+          retryDelay = 1000;
+          setUi("connected", "Connected", "127.0.0.1:" + PORT);
+          if (helloPayload) {
+            socket.send(JSON.stringify(helloPayload));
+          } else {
+            parent.postMessage({ pluginMessage: { type: "ui_ready" } }, "*");
+          }
+        };
+
+        socket.onmessage = (event) => {
+          if (gen !== connectionGen) return;
+          try {
+            const data = JSON.parse(event.data);
+            if (data && data.type === "rpc_request" && typeof data.id === "string") {
+              const timeoutMs = typeof data.timeoutMs === "number" ? data.timeoutMs : 30000;
+              const watchdog = setTimeout(() => {
+                workerWatchdogs.delete(data.id);
+                setUi("error", "Worker hung", "Reopen plugin in Figma");
+                if (activeWs === socket && socket.readyState === WebSocket.OPEN) {
+                  socket.send(
+                    JSON.stringify({
+                      type: "rpc_response",
+                      id: data.id,
+                      ok: false,
+                      error: {
+                        name: "WorkerTimeoutError",
+                        message: "Figma plugin worker did not respond; reopen the plugin if it is blocked by an infinite loop.",
+                      },
+                      logs: [],
+                    }),
+                  );
+                }
+              }, timeoutMs + 2000);
+              workerWatchdogs.set(data.id, watchdog);
+            }
+            parent.postMessage({ pluginMessage: data }, "*");
+          } catch {}
+        };
+
+        socket.onclose = () => {
+          clearWatchdogs();
+          if (gen !== connectionGen) return;
+          activeWs = null;
+          scheduleReconnect();
+        };
+
+        socket.onerror = () => {
+          if (gen !== connectionGen) return;
+          setUi("error", "Disconnected", "Check figcp MCP server");
+        };
+      }
+
+      window.onmessage = (event) => {
+        if (event.source !== window.parent) return;
+        const msg = event.data && event.data.pluginMessage;
+        if (!msg || typeof msg !== "object") return;
+        if (msg.type !== "hello" && msg.type !== "rpc_response") return;
+
+        if (msg.type === "hello") {
+          helloPayload = msg;
+          subEl.textContent = msg.fileName || msg.fileKey;
+        } else if (msg.type === "rpc_response" && typeof msg.id === "string") {
+          const t = workerWatchdogs.get(msg.id);
+          if (t) {
+            clearTimeout(t);
+            workerWatchdogs.delete(msg.id);
+          }
+        }
+
+        if (activeWs && activeWs.readyState === WebSocket.OPEN) {
+          activeWs.send(JSON.stringify(msg));
+        }
+      };
+
+      reconnectBtn.onclick = () => {
+        if (retryTimer) {
+          clearTimeout(retryTimer);
+          retryTimer = null;
+        }
+        clearWatchdogs();
+        retryDelay = 1000;
+        const prev = activeWs;
+        activeWs = null;
+        connectionGen++;
+        if (prev) {
+          try {
+            prev.close();
+          } catch {}
+        }
+        connect();
+      };
+
+      parent.postMessage({ pluginMessage: { type: "ui_ready" } }, "*");
+      connect();
+    </script>
+  </body>
+</html>
