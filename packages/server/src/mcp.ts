@@ -169,6 +169,27 @@ export function createFigcpMcpServer(transport: TransportNode): McpServer {
         };
       }
 
+      if (!fileKey && connectedFiles.length > 1) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  role: transport.role,
+                  port: transport.port,
+                  connectedFiles,
+                  status: "connected",
+                  hint: "Multiple Figma documents connected. Pass fileKey to inspect a specific document or view document changes.",
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+
       const response = await safeSendCommand(transport, {
         method: "figma_status",
         params: sinceChangeSeq !== undefined ? { sinceSeq: sinceChangeSeq } : {},

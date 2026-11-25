@@ -172,6 +172,25 @@ describe("MCP 4-tool server", () => {
       assert.ok(statusText.includes("connectedFiles"));
       assert.ok(statusText.includes("ds-file"));
 
+      // Connect second plugin and verify figma_status lists both without disambiguation error
+      const plugin2 = new FakeFigmaPlugin({
+        port: transportNode.port,
+        token: TEST_TOKEN,
+        fileKey: "screen-file",
+        fileName: "Checkout Screen",
+      });
+      await plugin2.connect();
+      try {
+        const multiStatusRes = await client.callTool({ name: "figma_status", arguments: {} });
+        assert.equal(multiStatusRes.isError ?? false, false);
+        const multiText = (multiStatusRes.content as Array<{ text: string }>)[0]!.text;
+        assert.ok(multiText.includes("ds-file"));
+        assert.ok(multiText.includes("screen-file"));
+        assert.ok(multiText.includes("Multiple Figma documents connected"));
+      } finally {
+        await plugin2.disconnect();
+      }
+
       const runRes = await client.callTool({
         name: "run_figma_js",
         arguments: { code: "return { id: '100:1' };" },

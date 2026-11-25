@@ -428,6 +428,7 @@ export interface DesignContextExtractedNode {
   name: string;
   type: string;
   rect: { x: number; y: number; width: number; height: number };
+  relativeRect?: { x: number; y: number; width: number; height: number };
   layoutMode?: "NONE" | "HORIZONTAL" | "VERTICAL";
   itemSpacing?: number;
   padding?: { top: number; right: number; bottom: number; left: number };
@@ -473,6 +474,20 @@ export function extractDesignContextNode(node: SceneNode, depth = 0, maxDepth = 
     type: node.type,
     rect: box,
   };
+
+  if (
+    typeof rec.x === "number" &&
+    typeof rec.y === "number" &&
+    typeof rec.width === "number" &&
+    typeof rec.height === "number"
+  ) {
+    res.relativeRect = {
+      x: Math.round(rec.x),
+      y: Math.round(rec.y),
+      width: Math.round(rec.width),
+      height: Math.round(rec.height),
+    };
+  }
 
   if ("layoutMode" in node && typeof rec.layoutMode === "string" && rec.layoutMode !== "NONE") {
     res.layoutMode = rec.layoutMode as DesignContextExtractedNode["layoutMode"];
@@ -635,8 +650,20 @@ export async function handleExportNodeAssets(
       nodeName: target.name,
     };
   } else {
-    const svgBytes = await target.exportAsync({ format: "SVG" });
-    const svgString = uint8ArrayToUtf8(svgBytes);
+    let svgString: string;
+    try {
+      const maybeString = await (target.exportAsync as (opts: unknown) => Promise<unknown>)({
+        format: "SVG_STRING",
+      });
+      if (typeof maybeString === "string") {
+        svgString = maybeString;
+      } else {
+        svgString = uint8ArrayToUtf8(maybeString as Uint8Array);
+      }
+    } catch {
+      const svgBytes = await target.exportAsync({ format: "SVG" });
+      svgString = uint8ArrayToUtf8(svgBytes);
+    }
     return {
       ok: true,
       format: "SVG",

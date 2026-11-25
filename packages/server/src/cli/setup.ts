@@ -121,6 +121,56 @@ function mergeJsonMcpConfig(
   return "updated";
 }
 
+function mergeTomlMcpConfig(
+  filePath: string,
+  serverEntry: string,
+  nodeBin: string,
+  figcpHome: string,
+  port: number,
+  dryRun: boolean,
+): "updated" | "skipped" {
+  const parentDir = dirname(filePath);
+  if (!existsSync(parentDir)) {
+    return "skipped";
+  }
+
+  let content = "";
+  if (existsSync(filePath)) {
+    try {
+      content = readFileSync(filePath, "utf8");
+    } catch {
+      return "skipped";
+    }
+  }
+
+  const tomlBlock = `[mcp_servers.figcp]
+command = ${JSON.stringify(nodeBin)}
+args = [${JSON.stringify(serverEntry)}]
+
+[mcp_servers.figcp.env]
+FIGCP_HOME = ${JSON.stringify(figcpHome)}
+FIGCP_PORT = ${JSON.stringify(String(port))}`;
+
+  let newContent: string;
+  const sectionRegex = /\[mcp_servers\.figcp\][\s\S]*?(?=\n\[(?!mcp_servers\.figcp\.env)|$)/;
+  if (sectionRegex.test(content)) {
+    newContent = content.replace(sectionRegex, tomlBlock);
+  } else if (content.trim().length > 0) {
+    newContent = `${content.trimEnd()}\n\n${tomlBlock}\n`;
+  } else {
+    newContent = `${tomlBlock}\n`;
+  }
+
+  if (!dryRun) {
+    const bakPath = `${filePath}.figcp.bak`;
+    if (existsSync(filePath) && !existsSync(bakPath)) {
+      copyFileSync(filePath, bakPath);
+    }
+    writeFileSync(filePath, newContent, "utf8");
+  }
+  return "updated";
+}
+
 export function runSetup(options: SetupOptions = {}): SetupResult {
   const userHome = options.homeDir ?? homedir();
   const figcpHome = options.figcpHome ?? resolveFigcpHome(join(userHome, ".figcp"));
@@ -251,6 +301,25 @@ export function runSetup(options: SetupOptions = {}): SetupResult {
       updatedClients.push(`${target.name} (${target.path})`);
     } else {
       skippedClients.push(target.name);
+    }
+  }
+
+  const hasCodex =
+    existsSync(join(userHome, ".codex", "config.toml")) || existsSync(join(userHome, ".codex"));
+  if (hasCodex) {
+    const codexPath = join(userHome, ".codex", "config.toml");
+    const codexStatus = mergeTomlMcpConfig(
+      codexPath,
+      serverEntry,
+      process.execPath,
+      figcpHome,
+      port,
+      dryRun,
+    );
+    if (codexStatus === "updated") {
+      updatedClients.push(`Codex CLI (${codexPath})`);
+    } else {
+      skippedClients.push("Codex CLI");
     }
   }
 

@@ -80,6 +80,7 @@ export async function runDoctor(options: {
     { name: "Cursor", path: join(userHome, ".cursor", "mcp.json") },
     { name: "Antigravity", path: join(userHome, ".gemini", "antigravity", "mcp_config.json") },
     { name: "Claude Code", path: join(userHome, ".claude.json") },
+    { name: "Codex CLI", path: join(userHome, ".codex", "config.toml") },
     { name: "OpenCode", path: join(userHome, ".config", "opencode", "opencode.json") },
   ];
   const configuredClients: string[] = [];

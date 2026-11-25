@@ -37,6 +37,10 @@ describe("CLI --setup installer", () => {
       // Prepare Claude Code dir
       writeFileSync(join(fakeHome, ".claude.json"), JSON.stringify({ mcpServers: {} }), "utf8");
 
+      // Prepare Codex CLI dir & config.toml
+      mkdirSync(join(fakeHome, ".codex"), { recursive: true });
+      writeFileSync(join(fakeHome, ".codex", "config.toml"), 'model = "gpt-5"\n', "utf8");
+
       // 1. Dry-run writes nothing
       const dry = runSetup({ homeDir: fakeHome, pluginDistDir: fakeDist, dryRun: true });
       assert.equal(dry.dryRun, true);
@@ -63,6 +67,12 @@ describe("CLI --setup installer", () => {
 
       const claudeCfg = JSON.parse(readFileSync(join(fakeHome, ".claude.json"), "utf8"));
       assert.equal(claudeCfg.mcpServers.figcp.type, "stdio");
+
+      assert.equal(existsSync(join(fakeHome, ".codex", "config.toml.figcp.bak")), true);
+      const codexToml = readFileSync(join(fakeHome, ".codex", "config.toml"), "utf8");
+      assert.ok(codexToml.includes('[mcp_servers.figcp]'));
+      assert.ok(codexToml.includes('FIGCP_PORT = "2026"'));
+      assert.ok(codexToml.includes('model = "gpt-5"'));
 
       const ocCfg = JSON.parse(readFileSync(join(fakeHome, ".config", "opencode", "opencode.json"), "utf8"));
       assert.ok(ocCfg.mcp.servers.other);

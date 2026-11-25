@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  handleExportNodeAssets,
   handleFigmaUndo,
+  handleGetDesignContext,
   handleInspectDesignSystem,
   handleInspectNodeBounds,
 } from "../inspectors.ts";
@@ -127,5 +129,44 @@ describe("plugin inspectors", () => {
     const s = await handleFigmaUndo(mockFigma, { action: "snapshot", title: "Before Refactor" });
     assert.equal(s.action, "snapshot");
     assert.equal(savedTitle, "Before Refactor");
+  });
+
+  it("extracts design context with relativeRect and exports SVG/PNG assets cleanly", async () => {
+    const mockNode = {
+      id: "200:1",
+      name: "Icon",
+      type: "FRAME",
+      x: 16,
+      y: 24,
+      width: 48,
+      height: 48,
+      absoluteBoundingBox: { x: 100, y: 200, width: 48, height: 48 },
+      exportAsync: async (opts: { format: string }) => {
+        if (opts.format === "PNG") {
+          return new Uint8Array([137, 80, 78, 71]);
+        }
+        return new TextEncoder().encode("<svg viewBox='0 0 48 48'></svg>");
+      },
+    };
+
+    const mockFigma = {
+      getNodeByIdAsync: async () => mockNode,
+      currentPage: { selection: [mockNode] },
+    } as unknown as PluginAPI;
+
+    const ctx = await handleGetDesignContext(mockFigma, { nodeId: "200:1" });
+    assert.equal(ctx.root.id, "200:1");
+    assert.equal(ctx.root.rect.width, 48);
+    assert.deepEqual(ctx.root.relativeRect, { x: 16, y: 24, width: 48, height: 48 });
+
+    const svgAsset = await handleExportNodeAssets(mockFigma, { nodeId: "200:1", format: "SVG" });
+    assert.equal(svgAsset.ok, true);
+    assert.equal(svgAsset.format, "SVG");
+    assert.ok(svgAsset.content.includes("<svg"));
+
+    const pngAsset = await handleExportNodeAssets(mockFigma, { nodeId: "200:1", format: "PNG" });
+    assert.equal(pngAsset.ok, true);
+    assert.equal(pngAsset.format, "PNG");
+    assert.equal(pngAsset.content, "iVBORw==");
   });
 });
