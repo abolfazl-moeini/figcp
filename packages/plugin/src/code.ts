@@ -27,36 +27,52 @@ interface RecordedChange {
 }
 
 let isAgentCommandRunning = false;
+let suppressChangesUntil = 0;
 let changeSeq = 0;
 const changeBuffer: RecordedChange[] = [];
 const MAX_CHANGES = 100;
 
-if (typeof figma.on === "function") {
-  figma.on("documentchange", (event: { documentChanges?: Array<{ id: string; type: string }> }) => {
-    if (isAgentCommandRunning || !event || !Array.isArray(event.documentChanges)) return;
-    for (const change of event.documentChanges) {
-      changeSeq++;
-      const node = typeof figma.getNodeById === "function" ? figma.getNodeById(change.id) : null;
-      changeBuffer.push({
-        seq: changeSeq,
-        id: change.id,
-        name:
-          node && "name" in node && typeof (node as { name?: unknown }).name === "string"
-            ? (node as { name: string }).name
-            : undefined,
-        type:
-          node && "type" in node && typeof (node as { type?: unknown }).type === "string"
-            ? (node as { type: string }).type
-            : "UNKNOWN",
-        changeType: change.type,
-        timestamp: Date.now(),
-      });
-      if (changeBuffer.length > MAX_CHANGES) {
-        changeBuffer.shift();
-      }
+function recordNodeChanges(changes: ReadonlyArray<{ id: string; type: string; node?: unknown }>): void {
+  if (isAgentCommandRunning || Date.now() < suppressChangesUntil) return;
+  for (const change of changes) {
+    changeSeq++;
+    const node = change.node as { name?: unknown; type?: unknown } | undefined;
+    changeBuffer.push({
+      seq: changeSeq,
+      id: change.id,
+      name: node && typeof node.name === "string" ? node.name : undefined,
+      type: node && typeof node.type === "string" ? node.type : "UNKNOWN",
+      changeType: change.type,
+      timestamp: Date.now(),
+    });
+    if (changeBuffer.length > MAX_CHANGES) {
+      changeBuffer.shift();
     }
-  });
+  }
 }
+
+let trackedPage: PageNode | null = null;
+const onPageNodeChange = (event: { nodeChanges?: Array<{ id: string; type: string; node?: unknown }> }) => {
+  if (event && Array.isArray(event.nodeChanges)) {
+    recordNodeChanges(event.nodeChanges);
+  }
+};
+
+function bindCurrentPageWatcher(): void {
+  try {
+    if (trackedPage && typeof trackedPage.off === "function") {
+      trackedPage.off("nodechange", onPageNodeChange as any);
+    }
+    if (figma.currentPage && typeof figma.currentPage.on === "function") {
+      trackedPage = figma.currentPage;
+      trackedPage.on("nodechange", onPageNodeChange as any);
+    }
+  } catch {
+    // Ignore if mock/environment does not support PageNode.on("nodechange")
+  }
+}
+
+bindCurrentPageWatcher();
 
 figma.showUI(__html__, { width: 260, height: 76, themeColors: true });
 
@@ -79,6 +95,7 @@ function sendHello(): void {
 
 if (typeof figma.on === "function") {
   figma.on("currentpagechange", () => {
+    bindCurrentPageWatcher();
     sendHello();
   });
 }
@@ -242,7 +259,14 @@ figma.ui.onmessage = async (msg: unknown) => {
 
       if (req.method === "get_design_context") {
         const result = await executor.runTask(() =>
-          handleGetDesignContext(figma, params as any),
+          handleGetDesignContext(figma, {
+            nodeId: typeof params.nodeId === "string" ? params.nodeId : undefined,
+            maxDepth: typeof params.maxDepth === "number" ? params.maxDepth : undefined,
+            includeScreenshot:
+              typeof params.includeScreenshot === "boolean" ? params.includeScreenshot : undefined,
+            screenshotScale:
+              typeof params.screenshotScale === "number" ? params.screenshotScale : undefined,
+          }),
         );
         figma.ui.postMessage({
           type: "rpc_response",
@@ -257,7 +281,11 @@ figma.ui.onmessage = async (msg: unknown) => {
 
       if (req.method === "export_node_assets") {
         const result = await executor.runTask(() =>
-          handleExportNodeAssets(figma, params as any),
+          handleExportNodeAssets(figma, {
+            nodeId: typeof params.nodeId === "string" ? params.nodeId : undefined,
+            format: params.format === "PNG" ? "PNG" : "SVG",
+            scale: typeof params.scale === "number" ? params.scale : undefined,
+          }),
         );
         figma.ui.postMessage({
           type: "rpc_response",
@@ -271,6 +299,7 @@ figma.ui.onmessage = async (msg: unknown) => {
       }
     } finally {
       isAgentCommandRunning = false;
+      suppressChangesUntil = Date.now() + 1500;
     }
 
     throw new Error(`Unsupported RPC method: ${String(req.method)}`);

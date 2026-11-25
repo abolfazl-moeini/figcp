@@ -1,15 +1,28 @@
 #!/usr/bin/env node
 import { join } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { getOrCreateToken, resolveFigcpHome } from "./auth.ts";
 import { runDoctor } from "./cli/doctor.ts";
 import { runSetup } from "./cli/setup.ts";
-import { enableUiLevelAddon } from "./cli/ui-level-addon.ts";
+import { enableUiLevelAddon, getUiLevelConfig, setUiLevelConfig } from "./cli/ui-level-addon.ts";
 import { createFigcpMcpServer } from "./mcp.ts";
 import { TransportNode } from "./transport/node.ts";
 
+async function promptYesNo(question: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = (await rl.question(question)).trim().toLowerCase();
+    return answer === "y" || answer === "yes";
+  } finally {
+    rl.close();
+  }
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  const withUiLevel = args.includes("--enable-ui-level") || args.includes("--with-ui-level");
+  const isSetup = args.includes("--setup") || args.includes("--dry-run") || args.includes("--install-skill");
 
   if (args.includes("--help") || args.includes("-h")) {
     process.stderr.write(
@@ -17,12 +30,14 @@ async function main(): Promise<void> {
         "figcp — Local Figma Design-System MCP Bridge",
         "",
         "Usage:",
-        "  figcp                Start MCP stdio server + local WebSocket bridge",
-        "  figcp --setup        Install plugin files to ~/.figcp/plugin/ and register MCP clients",
-        "  figcp --doctor       Diagnose local Node, plugin, token, port, and client health",
-        "  figcp --install-skill Install figcp SKILL.md to AI coding agents (~/.gemini or ~/.agents)",
-        "  figcp --dry-run      Preview --setup changes without writing files",
-        "  figcp --print-path   Print the Figma plugin manifest.json path",
+        "  figcp                  Start MCP stdio server + local WebSocket bridge",
+        "  figcp --setup          Install plugin files to ~/.figcp/plugin/ and register MCP clients",
+        "  figcp --doctor         Diagnose local Node, plugin, token, port, and client health",
+        "  figcp --install-skill  Install figcp SKILL.md to AI coding agents (~/.gemini or ~/.agents)",
+        "  figcp --with-ui-level  Enable optional ui-level visual/DOM verification integration",
+        "  figcp --no-prompt      Skip optional interactive prompts during --setup",
+        "  figcp --dry-run        Preview --setup changes without writing files",
+        "  figcp --print-path     Print the Figma plugin manifest.json path",
       ].join("\n") + "\n",
     );
     return;
@@ -30,12 +45,6 @@ async function main(): Promise<void> {
 
   if (args.includes("--print-path")) {
     process.stderr.write(`${join(resolveFigcpHome(), "plugin", "manifest.json")}\n`);
-    return;
-  }
-
-  if (args.includes("--enable-ui-level") || args.includes("--with-ui-level")) {
-    const res = enableUiLevelAddon();
-    process.stderr.write(`${res.message}\n`);
     return;
   }
 
@@ -57,7 +66,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (args.includes("--setup") || args.includes("--dry-run") || args.includes("--install-skill")) {
+  if (isSetup) {
     const dryRun = args.includes("--dry-run");
     const installSkill = args.includes("--install-skill") || args.includes("--setup");
     const result = runSetup({ dryRun, installSkill });
@@ -75,6 +84,35 @@ async function main(): Promise<void> {
         2,
       ) + "\n",
     );
+
+    if (!dryRun) {
+      if (withUiLevel) {
+        const res = enableUiLevelAddon();
+        process.stderr.write(`${res.message}\n`);
+      } else if (
+        args.includes("--setup") &&
+        !args.includes("--no-prompt") &&
+        process.stdin.isTTY &&
+        process.stdout.isTTY &&
+        getUiLevelConfig().uiLevel === "disabled"
+      ) {
+        const accepted = await promptYesNo(
+          "Enable optional ui-level verification for Figma -> Code workflows? (off by default) [y/N]: ",
+        );
+        if (accepted) {
+          const res = enableUiLevelAddon();
+          process.stderr.write(`${res.message}\n`);
+        } else {
+          setUiLevelConfig("declined");
+        }
+      }
+    }
+    return;
+  }
+
+  if (withUiLevel) {
+    const res = enableUiLevelAddon();
+    process.stderr.write(`${res.message}\n`);
     return;
   }
 

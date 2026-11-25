@@ -13,6 +13,7 @@ await build({
   entryPoints: [join(pkgRoot, "src/code.ts")],
   outfile: join(distDir, "code.js"),
   bundle: true,
+  minify: true,
   platform: "browser",
   target: "es2017",
   format: "iife",

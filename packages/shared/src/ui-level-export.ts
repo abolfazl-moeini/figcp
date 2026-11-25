@@ -1,19 +1,49 @@
-export interface UiLevelElement {
-  figmaId: string;
-  name: string;
-  type: string;
+export interface UiLevelStyleSpec {
+  paddingTop?: number;
+  paddingRight?: number;
+  paddingBottom?: number;
+  paddingLeft?: number;
+  borderTopWidth?: number;
+  borderRightWidth?: number;
+  borderBottomWidth?: number;
+  borderLeftWidth?: number;
+  borderTopLeftRadius?: number;
+  borderTopRightRadius?: number;
+  borderBottomRightRadius?: number;
+  borderBottomLeftRadius?: number;
+  rowGap?: number;
+  columnGap?: number;
+  fontSize?: number;
+  lineHeight?: number;
+  fontWeight?: number;
+  letterSpacing?: number;
+  fontFamily?: string;
+  color?: string;
+  backgroundColor?: string;
+  display?: string;
+  flexDirection?: string;
+  justifyContent?: string;
+  alignItems?: string;
+  width?: number;
+  height?: number;
+}
+
+export interface UiLevelNodeSpec {
+  id: string;
+  figmaId?: string;
   selector: string;
+  direction?: "ltr" | "rtl";
   rect: { x: number; y: number; width: number; height: number };
-  styles: Record<string, string>;
+  styles: UiLevelStyleSpec;
   text?: string;
   codeConnect?: { file: string; export?: string };
-  children?: UiLevelElement[];
 }
 
 export interface UiLevelNormalizedSpec {
   adapter: "figma";
-  viewport: { width: number; height: number };
-  elements: UiLevelElement[];
+  viewport: { width: number; height: number; deviceScaleFactor: number };
+  nodes: UiLevelNodeSpec[];
+  imagePath?: string;
 }
 
 export interface DesignContextNode {
@@ -27,6 +57,8 @@ export interface DesignContextNode {
   padding?: { top: number; right: number; bottom: number; left: number };
   alignItems?: string;
   justifyContent?: string;
+  primarySizing?: string;
+  counterSizing?: string;
   fills?: Array<{ hex?: string; opacity?: number; boundVariable?: string }>;
   strokes?: Array<{ hex?: string; opacity?: number; boundVariable?: string; width?: number }>;
   cornerRadius?: number;
@@ -37,6 +69,7 @@ export interface DesignContextNode {
     fontWeight?: string;
     fontSize?: number;
     lineHeight?: string | number;
+    letterSpacing?: string | number;
     textAlign?: string;
   };
   component?: {
@@ -51,109 +84,158 @@ export interface DesignContextNode {
   children?: DesignContextNode[];
 }
 
+function mapFontWeightToNumber(weight?: string): number | undefined {
+  if (!weight) return undefined;
+  const w = weight.trim().toLowerCase();
+  const numeric = Number(w);
+  if (Number.isFinite(numeric) && numeric >= 100 && numeric <= 1000) return numeric;
+  if (w.includes("thin") || w.includes("hairline")) return 100;
+  if (w.includes("extralight") || w.includes("ultralight")) return 200;
+  if (w.includes("light")) return 300;
+  if (w.includes("medium")) return 500;
+  if (w.includes("semibold") || w.includes("demibold")) return 600;
+  if (w.includes("extrabold") || w.includes("ultrabold")) return 800;
+  if (w.includes("black") || w.includes("heavy")) return 900;
+  if (w.includes("bold")) return 700;
+  if (w.includes("regular") || w.includes("normal")) return 400;
+  return undefined;
+}
+
+function parseNumericLineHeight(lh: string | number | undefined, fontSize?: number): number | undefined {
+  if (typeof lh === "number" && Number.isFinite(lh)) return lh;
+  if (typeof lh === "string" && lh.endsWith("%") && fontSize) {
+    const pct = parseFloat(lh);
+    if (Number.isFinite(pct)) return Math.round((pct / 100) * fontSize * 100) / 100;
+  }
+  return undefined;
+}
+
+function mapJustifyOrAlign(val?: string): string | undefined {
+  if (!val) return undefined;
+  const v = val.toUpperCase();
+  if (v === "MIN") return "flex-start";
+  if (v === "CENTER") return "center";
+  if (v === "MAX") return "flex-end";
+  if (v === "SPACE_BETWEEN") return "space-between";
+  if (v === "BASELINE") return "baseline";
+  return val.toLowerCase();
+}
+
 /**
- * Converts rich DesignContext tree into the offline NormalizedSpec format
- * natively consumed by `ui-level` (Gate 1 DOM geometry + computed styles).
+ * Converts rich DesignContext tree into the flat NormalizedSpec format
+ * natively consumed by `ui-level` (NormalizedSpecSchema).
  */
 export function toUiLevelNormalizedSpec(
   root: DesignContextNode,
   viewportWidth?: number,
   viewportHeight?: number,
+  options: { deviceScaleFactor?: number; imagePath?: string } = {},
 ): UiLevelNormalizedSpec {
-  const width = viewportWidth ?? (root.rect.width > 0 ? root.rect.width : 1440);
-  const height = viewportHeight ?? (root.rect.height > 0 ? root.rect.height : 900);
+  const width = Math.max(1, Math.round(viewportWidth ?? (root.rect.width > 0 ? root.rect.width : 1440)));
+  const height = Math.max(1, Math.round(viewportHeight ?? (root.rect.height > 0 ? root.rect.height : 900)));
+  const deviceScaleFactor = options.deviceScaleFactor ?? 2;
+  const nodes: UiLevelNodeSpec[] = [];
 
-  function convertNode(node: DesignContextNode, parentRect?: { x: number; y: number }): UiLevelElement {
-    const computedStyles: Record<string, string> = {};
+  function visit(node: DesignContextNode, rootOrigin: { x: number; y: number }): void {
+    const styles: UiLevelStyleSpec = {};
 
-    // 1. Layout styles
     if (node.layoutMode && node.layoutMode !== "NONE") {
-      computedStyles["display"] = "flex";
-      computedStyles["flex-direction"] = node.layoutMode === "HORIZONTAL" ? "row" : "column";
+      styles.display = "flex";
+      styles.flexDirection = node.layoutMode === "HORIZONTAL" ? "row" : "column";
       if (node.itemSpacing !== undefined && node.itemSpacing > 0) {
-        computedStyles["gap"] = `${node.itemSpacing}px`;
+        if (node.layoutMode === "HORIZONTAL") {
+          styles.columnGap = node.itemSpacing;
+        } else {
+          styles.rowGap = node.itemSpacing;
+        }
       }
       if (node.padding) {
-        computedStyles["padding"] = `${node.padding.top}px ${node.padding.right}px ${node.padding.bottom}px ${node.padding.left}px`;
+        styles.paddingTop = node.padding.top;
+        styles.paddingRight = node.padding.right;
+        styles.paddingBottom = node.padding.bottom;
+        styles.paddingLeft = node.padding.left;
       }
-      if (node.alignItems) {
-        computedStyles["align-items"] = node.alignItems.toLowerCase();
-      }
-      if (node.justifyContent) {
-        computedStyles["justify-content"] = node.justifyContent.toLowerCase();
-      }
+      const align = mapJustifyOrAlign(node.alignItems);
+      if (align) styles.alignItems = align;
+      const justify = mapJustifyOrAlign(node.justifyContent);
+      if (justify) styles.justifyContent = justify;
     }
 
-    // 2. Visual fills
     const primaryFill = node.fills?.find((f) => f.hex);
-    if (primaryFill && primaryFill.hex) {
-      computedStyles["background-color"] = primaryFill.hex;
+    if (primaryFill?.hex && node.type !== "TEXT") {
+      styles.backgroundColor = primaryFill.hex;
     }
 
-    // 3. Borders & Radii
     if (node.cornerRadius !== undefined && node.cornerRadius > 0) {
-      computedStyles["border-radius"] = `${node.cornerRadius}px`;
-    }
-    const primaryStroke = node.strokes?.find((s) => s.hex);
-    if (primaryStroke && primaryStroke.hex) {
-      const w = primaryStroke.width ?? 1;
-      computedStyles["border"] = `${w}px solid ${primaryStroke.hex}`;
+      styles.borderTopLeftRadius = node.cornerRadius;
+      styles.borderTopRightRadius = node.cornerRadius;
+      styles.borderBottomRightRadius = node.cornerRadius;
+      styles.borderBottomLeftRadius = node.cornerRadius;
     }
 
-    // 4. Typography
+    const primaryStroke = node.strokes?.find((s) => s.hex);
+    if (primaryStroke?.hex) {
+      const w = primaryStroke.width ?? 1;
+      styles.borderTopWidth = w;
+      styles.borderRightWidth = w;
+      styles.borderBottomWidth = w;
+      styles.borderLeftWidth = w;
+    }
+
     if (node.typography) {
       if (node.typography.fontFamily) {
-        computedStyles["font-family"] = node.typography.fontFamily;
+        styles.fontFamily = node.typography.fontFamily;
       }
-      if (node.typography.fontSize) {
-        computedStyles["font-size"] = `${node.typography.fontSize}px`;
+      if (typeof node.typography.fontSize === "number") {
+        styles.fontSize = node.typography.fontSize;
       }
-      if (node.typography.fontWeight) {
-        computedStyles["font-weight"] = node.typography.fontWeight;
+      const weightNum = mapFontWeightToNumber(node.typography.fontWeight);
+      if (weightNum !== undefined) {
+        styles.fontWeight = weightNum;
       }
-      if (node.typography.textAlign) {
-        computedStyles["text-align"] = node.typography.textAlign.toLowerCase();
+      const lh = parseNumericLineHeight(node.typography.lineHeight, node.typography.fontSize);
+      if (lh !== undefined) {
+        styles.lineHeight = lh;
+      }
+      if (typeof node.typography.letterSpacing === "number") {
+        styles.letterSpacing = node.typography.letterSpacing;
       }
       if (primaryFill?.hex) {
-        computedStyles["color"] = primaryFill.hex;
+        styles.color = primaryFill.hex;
       }
     }
 
-    const relativeRect = parentRect
-      ? {
-          x: node.rect.x - parentRect.x,
-          y: node.rect.y - parentRect.y,
-          width: node.rect.width,
-          height: node.rect.height,
-        }
-      : {
-          x: 0,
-          y: 0,
-          width: node.rect.width,
-          height: node.rect.height,
-        };
-
-    const element: UiLevelElement = {
-      figmaId: node.id,
-      name: node.name,
-      type: node.type,
-      selector: `[data-figma-id="${node.id}"]`,
-      rect: relativeRect,
-      styles: computedStyles,
-      text: node.typography?.characters,
-      codeConnect: node.codeConnect,
+    const relRect = {
+      x: node.rect.x - rootOrigin.x,
+      y: node.rect.y - rootOrigin.y,
+      width: node.rect.width,
+      height: node.rect.height,
     };
 
-    if (node.children && node.children.length > 0) {
-      element.children = node.children.map((c) => convertNode(c, node.rect));
-    }
+    nodes.push({
+      id: node.id,
+      figmaId: node.id,
+      selector: `[data-figma-id="${node.id}"]`,
+      ...(node.typography?.textAlign === "RIGHT" ? { direction: "rtl" as const } : {}),
+      rect: relRect,
+      styles,
+      ...(node.typography?.characters !== undefined ? { text: node.typography.characters } : {}),
+      ...(node.codeConnect ? { codeConnect: node.codeConnect } : {}),
+    });
 
-    return element;
+    if (node.children) {
+      for (const child of node.children) {
+        visit(child, rootOrigin);
+      }
+    }
   }
+
+  visit(root, { x: root.rect.x, y: root.rect.y });
 
   return {
     adapter: "figma",
-    viewport: { width, height },
-    elements: [convertNode(root)],
+    viewport: { width, height, deviceScaleFactor },
+    nodes,
+    ...(options.imagePath ? { imagePath: options.imagePath } : {}),
   };
 }

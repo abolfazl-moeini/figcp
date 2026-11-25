@@ -103,7 +103,8 @@
 
       function scheduleReconnect() {
         if (!hasToken || retryTimer) return;
-        setUi("", "Reconnecting...", "Retry in " + Math.round(retryDelay / 1000) + "s");
+        const label = retryDelay < 1000 ? retryDelay + "ms" : Math.round(retryDelay / 1000) + "s";
+        setUi("", "Reconnecting...", "Retry in " + label);
         retryTimer = setTimeout(() => {
           retryTimer = null;
           retryDelay = retryDelay < 800 ? 800 : retryDelay < 2000 ? 2000 : 5000;
@@ -136,7 +137,7 @@
             socket.close();
             return;
           }
-          retryDelay = 1000;
+          retryDelay = 300;
           setUi("connected", "Connected", "127.0.0.1:" + PORT);
           if (helloPayload) {
             socket.send(JSON.stringify(helloPayload));
@@ -216,7 +217,7 @@
           retryTimer = null;
         }
         clearWatchdogs();
-        retryDelay = 1000;
+        retryDelay = 300;
         const prev = activeWs;
         activeWs = null;
         connectionGen++;

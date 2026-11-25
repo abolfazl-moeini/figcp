@@ -1,7 +1,6 @@
-import { execSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { delimiter, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolveFigcpHome } from "../auth.ts";
 
 export type UiLevelState = "disabled" | "enabled" | "declined";
@@ -11,17 +10,32 @@ export interface FigcpConfig {
 }
 
 export function detectUiLevel(): boolean {
-  try {
-    execSync("which ui-level", { stdio: "ignore" });
+  const explicit = process.env.UI_LEVEL_PATH;
+  if (explicit && existsSync(explicit)) {
     return true;
-  } catch {
-    // Check local developer path or repo node_modules
-    const localDevPath = "/Users/moeini/Dev/ui-level";
-    if (existsSync(localDevPath)) return true;
-    const binPath = join(process.cwd(), "node_modules", ".bin", "ui-level");
-    if (existsSync(binPath)) return true;
-    return false;
   }
+
+  const localBin = join(
+    process.cwd(),
+    "node_modules",
+    ".bin",
+    process.platform === "win32" ? "ui-level.cmd" : "ui-level",
+  );
+  if (existsSync(localBin)) {
+    return true;
+  }
+
+  const pathEnv = process.env.PATH ?? "";
+  const exts = process.platform === "win32" ? [".cmd", ".exe", ".bat", ""] : [""];
+  for (const dir of pathEnv.split(delimiter)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      if (existsSync(join(dir, `ui-level${ext}`))) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 export function getUiLevelConfig(figcpHome = resolveFigcpHome()): FigcpConfig {
@@ -40,29 +54,54 @@ export function getUiLevelConfig(figcpHome = resolveFigcpHome()): FigcpConfig {
 }
 
 export function setUiLevelConfig(state: UiLevelState, figcpHome = resolveFigcpHome()): void {
+  mkdirSync(figcpHome, { recursive: true, mode: 0o700 });
   const cfgPath = join(figcpHome, "config.json");
   const existing = getUiLevelConfig(figcpHome);
   existing.uiLevel = state;
   writeFileSync(cfgPath, `${JSON.stringify(existing, null, 2)}\n`, "utf8");
 }
 
-export function enableUiLevelAddon(figcpHome = resolveFigcpHome()): {
+export function enableUiLevelAddon(
+  figcpHome = resolveFigcpHome(),
+  options: { installPackage?: boolean } = {},
+): {
   ok: boolean;
+  installed: boolean;
   message: string;
 } {
-  const installed = detectUiLevel();
+  let installed = detectUiLevel();
+
+  if (!installed && options.installPackage) {
+    const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+    const installRes = spawnSync(npmCmd, ["install", "-g", "ui-level"], {
+      stdio: "inherit",
+    });
+    if (installRes.status === 0) {
+      installed = detectUiLevel();
+    } else {
+      setUiLevelConfig("enabled", figcpHome);
+      return {
+        ok: false,
+        installed: false,
+        message: "Failed to install `ui-level` globally via npm. Enabled in config; install manually with `npm install -g ui-level`.",
+      };
+    }
+  }
+
   setUiLevelConfig("enabled", figcpHome);
 
   if (installed) {
     return {
       ok: true,
+      installed: true,
       message: "ui-level integration enabled. Offline NormalizedSpec exports will verify against ui-level.",
     };
   }
 
   return {
     ok: true,
+    installed: false,
     message:
-      "ui-level enabled in config. Note: ui-level binary not detected on PATH. Install it via `npm install -g ui-level` or link /Users/moeini/Dev/ui-level.",
+      "ui-level enabled in config. Note: ui-level binary not detected on PATH. Install it via `npm install -g ui-level` when ready.",
   };
 }

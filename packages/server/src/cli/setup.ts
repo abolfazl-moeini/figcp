@@ -152,14 +152,10 @@ FIGCP_HOME = ${JSON.stringify(figcpHome)}
 FIGCP_PORT = ${JSON.stringify(String(port))}`;
 
   let newContent: string;
-  const sectionRegex = /\[mcp_servers\.figcp\][\s\S]*?(?=\n\[(?!mcp_servers\.figcp\.env)|$)/;
-  if (sectionRegex.test(content)) {
-    newContent = content.replace(sectionRegex, tomlBlock);
-  } else if (content.trim().length > 0) {
-    newContent = `${content.trimEnd()}\n\n${tomlBlock}\n`;
-  } else {
-    newContent = `${tomlBlock}\n`;
-  }
+  // Remove any existing [mcp_servers.figcp] or [mcp_servers.figcp.*] sections before appending cleanly
+  const anyFigcpSection = /^\s*\[mcp_servers\.figcp(?:\.[^\]]+)?\][\s\S]*?(?=^\s*\[(?!mcp_servers\.figcp(?:\.|\]) )|$)/gm;
+  const stripped = content.replace(anyFigcpSection, "").trimEnd();
+  newContent = stripped.length > 0 ? `${stripped}\n\n${tomlBlock}\n` : `${tomlBlock}\n`;
 
   if (!dryRun) {
     const bakPath = `${filePath}.figcp.bak`;

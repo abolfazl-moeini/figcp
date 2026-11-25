@@ -212,6 +212,8 @@ export async function handleInspectDesignSystem(
         name: s.name,
         fontName: s.fontName,
         fontSize: s.fontSize,
+        lineHeight: (s as unknown as { lineHeight?: unknown }).lineHeight,
+        letterSpacing: (s as unknown as { letterSpacing?: unknown }).letterSpacing,
       })),
       effect: effectStyles.map((s) => {
         const eff = (s as unknown as { effects?: readonly Effect[] }).effects?.[0];
@@ -446,6 +448,7 @@ export interface DesignContextExtractedNode {
     fontWeight?: string;
     fontSize?: number;
     lineHeight?: string | number;
+    letterSpacing?: string | number;
     textAlign?: string;
   };
   component?: {
@@ -456,7 +459,23 @@ export interface DesignContextExtractedNode {
   children?: DesignContextExtractedNode[];
 }
 
-export function extractDesignContextNode(node: SceneNode, depth = 0, maxDepth = 6): DesignContextExtractedNode {
+function formatLineHeightOrSpacing(val: unknown): string | number | undefined {
+  if (!val || typeof val !== "object") return undefined;
+  const v = val as { unit?: string; value?: number };
+  if (v.unit === "AUTO") return "AUTO";
+  if (typeof v.value === "number") {
+    return v.unit === "PERCENT" ? `${v.value}%` : v.value;
+  }
+  return undefined;
+}
+
+export async function extractDesignContextNode(
+  node: SceneNode,
+  depth = 0,
+  maxDepth = 6,
+  parentBox?: { x: number; y: number },
+  varNameById?: Map<string, string>,
+): Promise<DesignContextExtractedNode> {
   const box =
     "absoluteBoundingBox" in node && node.absoluteBoundingBox
       ? {
@@ -475,7 +494,16 @@ export function extractDesignContextNode(node: SceneNode, depth = 0, maxDepth = 
     rect: box,
   };
 
-  if (
+  if (depth === 0) {
+    res.relativeRect = { x: 0, y: 0, width: box.width, height: box.height };
+  } else if (parentBox) {
+    res.relativeRect = {
+      x: box.x - parentBox.x,
+      y: box.y - parentBox.y,
+      width: box.width,
+      height: box.height,
+    };
+  } else if (
     typeof rec.x === "number" &&
     typeof rec.y === "number" &&
     typeof rec.width === "number" &&
@@ -508,14 +536,31 @@ export function extractDesignContextNode(node: SceneNode, depth = 0, maxDepth = 
     res.cornerRadius = rec.cornerRadius;
   }
 
+  const boundVars = rec.boundVariables && typeof rec.boundVariables === "object"
+    ? (rec.boundVariables as Record<string, unknown>)
+    : undefined;
+  const resolveBoundVarName = (alias: unknown): string | undefined => {
+    if (!alias || typeof alias !== "object" || !("id" in alias)) return undefined;
+    const id = String((alias as { id: unknown }).id);
+    return varNameById?.get(id) ?? id;
+  };
+
   if ("fills" in node && Array.isArray(rec.fills)) {
     const fills: NonNullable<DesignContextExtractedNode["fills"]> = [];
-    for (const p of rec.fills) {
-      if (p.type === "SOLID" && p.color) {
+    const nodeFillBounds = Array.isArray(boundVars?.fills) ? (boundVars.fills as unknown[]) : undefined;
+    for (let i = 0; i < rec.fills.length; i++) {
+      const p = rec.fills[i];
+      if (p && p.visible !== false && p.type === "SOLID" && p.color) {
         const r = Math.round(p.color.r * 255).toString(16).padStart(2, "0");
         const g = Math.round(p.color.g * 255).toString(16).padStart(2, "0");
         const b = Math.round(p.color.b * 255).toString(16).padStart(2, "0");
-        fills.push({ hex: `#${r}${g}${b}`, opacity: p.opacity });
+        const boundVariable =
+          resolveBoundVarName(p.boundVariables?.color) ?? resolveBoundVarName(nodeFillBounds?.[i]);
+        fills.push({
+          hex: `#${r}${g}${b}`,
+          ...(p.opacity !== undefined ? { opacity: p.opacity } : {}),
+          ...(boundVariable ? { boundVariable } : {}),
+        });
       }
     }
     if (fills.length > 0) res.fills = fills;
@@ -523,23 +568,52 @@ export function extractDesignContextNode(node: SceneNode, depth = 0, maxDepth = 
 
   if ("strokes" in node && Array.isArray(rec.strokes)) {
     const strokes: NonNullable<DesignContextExtractedNode["strokes"]> = [];
-    for (const p of rec.strokes) {
-      if (p.type === "SOLID" && p.color) {
+    const nodeStrokeBounds = Array.isArray(boundVars?.strokes) ? (boundVars.strokes as unknown[]) : undefined;
+    for (let i = 0; i < rec.strokes.length; i++) {
+      const p = rec.strokes[i];
+      if (p && p.visible !== false && p.type === "SOLID" && p.color) {
         const r = Math.round(p.color.r * 255).toString(16).padStart(2, "0");
         const g = Math.round(p.color.g * 255).toString(16).padStart(2, "0");
         const b = Math.round(p.color.b * 255).toString(16).padStart(2, "0");
+        const boundVariable =
+          resolveBoundVarName(p.boundVariables?.color) ?? resolveBoundVarName(nodeStrokeBounds?.[i]);
         strokes.push({
           hex: `#${r}${g}${b}`,
-          opacity: p.opacity,
-          width: typeof rec.strokeWeight === "number" ? rec.strokeWeight : undefined,
+          ...(p.opacity !== undefined ? { opacity: p.opacity } : {}),
+          ...(boundVariable ? { boundVariable } : {}),
+          ...(typeof rec.strokeWeight === "number" ? { width: rec.strokeWeight } : {}),
         });
       }
     }
     if (strokes.length > 0) res.strokes = strokes;
   }
 
+  if ("effects" in node && Array.isArray(rec.effects)) {
+    const effects: NonNullable<DesignContextExtractedNode["effects"]> = [];
+    for (const eff of rec.effects) {
+      if (!eff || eff.visible === false || typeof eff.type !== "string") continue;
+      let colorHex: string | undefined;
+      if (eff.color && typeof eff.color === "object") {
+        const c = eff.color as { r: number; g: number; b: number };
+        const r = Math.round(c.r * 255).toString(16).padStart(2, "0");
+        const g = Math.round(c.g * 255).toString(16).padStart(2, "0");
+        const b = Math.round(c.b * 255).toString(16).padStart(2, "0");
+        colorHex = `#${r}${g}${b}`;
+      }
+      effects.push({
+        type: eff.type,
+        ...(colorHex ? { colorHex } : {}),
+        ...(typeof eff.radius === "number" ? { radius: eff.radius } : {}),
+        ...(eff.offset && typeof eff.offset === "object" ? { offset: eff.offset } : {}),
+      });
+    }
+    if (effects.length > 0) res.effects = effects;
+  }
+
   if (node.type === "TEXT") {
     const tNode = node as TextNode;
+    const lineHeight = formatLineHeightOrSpacing((tNode as unknown as { lineHeight?: unknown }).lineHeight);
+    const letterSpacing = formatLineHeightOrSpacing((tNode as unknown as { letterSpacing?: unknown }).letterSpacing);
     res.typography = {
       characters: tNode.characters,
       fontSize: typeof tNode.fontSize === "number" ? tNode.fontSize : undefined,
@@ -551,15 +625,21 @@ export function extractDesignContextNode(node: SceneNode, depth = 0, maxDepth = 
         typeof tNode.fontName === "object" && tNode.fontName !== null
           ? (tNode.fontName as FontName).style
           : undefined,
+      ...(lineHeight !== undefined ? { lineHeight } : {}),
+      ...(letterSpacing !== undefined ? { letterSpacing } : {}),
       textAlign: typeof tNode.textAlignHorizontal === "string" ? tNode.textAlignHorizontal : undefined,
     };
   }
 
   if (node.type === "INSTANCE") {
     const inst = node as InstanceNode;
+    const mainComp =
+      typeof inst.getMainComponentAsync === "function"
+        ? await inst.getMainComponentAsync().catch(() => null)
+        : (inst as unknown as { mainComponent?: ComponentNode | null }).mainComponent ?? null;
     res.component = {
-      id: inst.mainComponent?.id ?? inst.id,
-      name: inst.mainComponent?.name ?? inst.name,
+      id: mainComp?.id ?? inst.id,
+      name: mainComp?.name ?? inst.name,
       properties: inst.componentProperties ?? {},
     };
   } else if (node.type === "COMPONENT") {
@@ -570,9 +650,12 @@ export function extractDesignContextNode(node: SceneNode, depth = 0, maxDepth = 
   }
 
   if ("children" in node && Array.isArray(node.children) && depth < maxDepth) {
-    res.children = (node.children as SceneNode[])
-      .filter((c) => c.visible !== false)
-      .map((c) => extractDesignContextNode(c, depth + 1, maxDepth));
+    const visibleChildren = (node.children as SceneNode[]).filter((c) => c.visible !== false);
+    const childNodes: DesignContextExtractedNode[] = [];
+    for (const c of visibleChildren) {
+      childNodes.push(await extractDesignContextNode(c, depth + 1, maxDepth, box, varNameById));
+    }
+    res.children = childNodes;
   }
 
   return res;
@@ -602,7 +685,15 @@ export async function handleGetDesignContext(
     }
   }
 
-  const root = extractDesignContextNode(target, 0, params.maxDepth ?? 6);
+  const varNameById = new Map<string, string>();
+  if (figmaApi.variables && typeof figmaApi.variables.getLocalVariablesAsync === "function") {
+    const localVars = await figmaApi.variables.getLocalVariablesAsync().catch(() => []);
+    for (const v of localVars) {
+      varNameById.set(v.id, v.name);
+    }
+  }
+
+  const root = await extractDesignContextNode(target, 0, params.maxDepth ?? 6, undefined, varNameById);
 
   let screenshotBase64: string | undefined;
   if (params.includeScreenshot) {

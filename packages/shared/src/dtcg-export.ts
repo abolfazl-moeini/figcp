@@ -18,8 +18,18 @@ export interface DtcgToken {
 export function toDtcgTokens(snapshot: DesignSystemSnapshot): DtcgTokenGroup {
   const root: DtcgTokenGroup = {};
 
+  // Pre-index variable name -> collection key so alias references include their collection namespace
+  const varCollectionByName = new Map<string, string>();
+  for (const collection of snapshot.variableCollections) {
+    const colKey = collection.name.replace(/\//g, ".");
+    for (const v of collection.variables) {
+      varCollectionByName.set(v.name.trim(), colKey);
+    }
+  }
+
   // 1. Variable Collections
   for (const collection of snapshot.variableCollections) {
+    const colKey = collection.name.replace(/\//g, ".");
     const colGroup: DtcgTokenGroup = {};
     for (const v of collection.variables) {
       const parts = v.name.split("/").map((p) => p.trim());
@@ -42,11 +52,13 @@ export function toDtcgTokens(snapshot: DesignSystemSnapshot): DtcgTokenGroup {
       if (v.resolvedType === "COLOR") {
         type = "color";
         if (typeof primaryValue === "string" && primaryValue.startsWith("{")) {
-          // Format alias: "{border/focus -> blue/500} = \"#0000ff\"" -> "{blue.500}"
+          // Format alias: "{border/focus -> blue/500} = \"#0000ff\"" -> "{Colors.border.focus}"
           const match = primaryValue.match(/\{([^}]+)\}/);
           if (match && match[1]) {
-            const aliasPath = match[1].split("->").pop()?.trim().replace(/\//g, ".") ?? "";
-            val = `{${aliasPath}}`;
+            const firstHop = match[1].split("->")[0]?.trim() ?? "";
+            const targetCol = varCollectionByName.get(firstHop) ?? colKey;
+            const aliasPath = firstHop.replace(/\//g, ".");
+            val = `{${targetCol}.${aliasPath}}`;
           }
         }
       } else if (v.resolvedType === "FLOAT") {
@@ -61,7 +73,7 @@ export function toDtcgTokens(snapshot: DesignSystemSnapshot): DtcgTokenGroup {
         $value: val,
       };
     }
-    root[collection.name.replace(/\//g, ".")] = colGroup;
+    root[colKey] = colGroup;
   }
 
   // 2. Paint Styles
@@ -75,7 +87,9 @@ export function toDtcgTokens(snapshot: DesignSystemSnapshot): DtcgTokenGroup {
         };
       }
     }
-    root["colorStyles"] = paintGroup;
+    if (Object.keys(paintGroup).length > 0) {
+      root["colorStyles"] = paintGroup;
+    }
   }
 
   // 3. Text Styles
@@ -87,11 +101,33 @@ export function toDtcgTokens(snapshot: DesignSystemSnapshot): DtcgTokenGroup {
         $value: {
           fontFamily: t.fontName?.family ?? "sans-serif",
           fontWeight: t.fontName?.style ?? "Regular",
-          fontSize: t.fontSize ? `${t.fontSize}px` : undefined,
+          fontSize: t.fontSize ? `${t.fontSize}px` : "14px",
         },
       };
     }
     root["textStyles"] = textGroup;
+  }
+
+  // 4. Effect Styles
+  if (snapshot.styles.effect.length > 0) {
+    const effectGroup: DtcgTokenGroup = {};
+    for (const e of snapshot.styles.effect) {
+      if (e.colorHex || e.radius !== undefined) {
+        effectGroup[e.name.replace(/\//g, ".")] = {
+          $type: "shadow",
+          $value: {
+            color: e.colorHex ?? "#00000040",
+            offsetX: `${e.offset?.x ?? 0}px`,
+            offsetY: `${e.offset?.y ?? 2}px`,
+            blur: `${e.radius ?? 4}px`,
+            spread: "0px",
+          },
+        };
+      }
+    }
+    if (Object.keys(effectGroup).length > 0) {
+      root["effectStyles"] = effectGroup;
+    }
   }
 
   return root;

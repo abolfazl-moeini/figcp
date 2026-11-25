@@ -46,7 +46,7 @@ describe("DTCG & ui-level Cross-Contract Exporters", () => {
             fontSize: 24,
           },
         ],
-        effect: [],
+        effect: [{ id: "e1", name: "shadow/sm", type: "DROP_SHADOW", colorHex: "#000000", radius: 4, offset: { x: 0, y: 2 } }],
       },
       componentSets: [],
     };
@@ -56,7 +56,7 @@ describe("DTCG & ui-level Cross-Contract Exporters", () => {
     assert.ok(colors);
     assert.deepEqual(colors["brand"]?.["primary"], { $type: "color", $value: "#3b82f6" });
     assert.deepEqual(colors["spacing"]?.["md"], { $type: "dimension", $value: "16px" });
-    assert.deepEqual(colors["border"]?.["focus"], { $type: "color", $value: "{brand.primary}" });
+    assert.deepEqual(colors["border"]?.["focus"], { $type: "color", $value: "{Colors.brand.primary}" });
 
     const paintGroup = tokens["colorStyles"] as Record<string, any>;
     assert.deepEqual(paintGroup?.["surface.card"], { $type: "color", $value: "#ffffff" });
@@ -70,9 +70,12 @@ describe("DTCG & ui-level Cross-Contract Exporters", () => {
         fontSize: "24px",
       },
     });
+
+    const effectGroup = tokens["effectStyles"] as Record<string, any>;
+    assert.equal(effectGroup?.["shadow.sm"]?.["$type"], "shadow");
   });
 
-  it("converts DesignContextNode into offline NormalizedSpec for ui-level", () => {
+  it("converts DesignContextNode into flat ui-level NormalizedSpec matching ui-level schema", () => {
     const root: DesignContextNode = {
       id: "10:1",
       name: "Search Card",
@@ -95,6 +98,7 @@ describe("DTCG & ui-level Cross-Contract Exporters", () => {
             fontFamily: "IRANSansXFaNum",
             fontWeight: "Regular",
             fontSize: 14,
+            lineHeight: 20,
             textAlign: "RIGHT",
           },
           fills: [{ hex: "#1e293b" }],
@@ -102,26 +106,38 @@ describe("DTCG & ui-level Cross-Contract Exporters", () => {
       ],
     };
 
-    const spec = toUiLevelNormalizedSpec(root, 1440, 900);
+    const spec = toUiLevelNormalizedSpec(root, 1440, 900, {
+      deviceScaleFactor: 2,
+      imagePath: "reference.png",
+    });
     assert.equal(spec.adapter, "figma");
-    assert.deepEqual(spec.viewport, { width: 1440, height: 900 });
-    assert.equal(spec.elements.length, 1);
+    assert.deepEqual(spec.viewport, { width: 1440, height: 900, deviceScaleFactor: 2 });
+    assert.equal(spec.imagePath, "reference.png");
+    assert.equal(spec.nodes.length, 2);
 
-    const elem = spec.elements[0]!;
+    const elem = spec.nodes[0]!;
+    assert.equal(elem.id, "10:1");
     assert.equal(elem.figmaId, "10:1");
     assert.equal(elem.selector, '[data-figma-id="10:1"]');
-    assert.equal(elem.styles["display"], "flex");
-    assert.equal(elem.styles["flex-direction"], "row");
-    assert.equal(elem.styles["gap"], "12px");
-    assert.equal(elem.styles["background-color"], "#ffffff");
-    assert.equal(elem.styles["border-radius"], "12px");
+    assert.equal(elem.styles.display, "flex");
+    assert.equal(elem.styles.flexDirection, "row");
+    assert.equal(elem.styles.columnGap, 12);
+    assert.equal(elem.styles.paddingTop, 16);
+    assert.equal(elem.styles.paddingLeft, 20);
+    assert.equal(elem.styles.backgroundColor, "#ffffff");
+    assert.equal(elem.styles.borderTopLeftRadius, 12);
+    assert.equal(elem.styles.borderTopWidth, 1);
 
-    const child = elem.children?.[0]!;
+    const child = spec.nodes[1]!;
+    assert.equal(child.id, "10:2");
     assert.equal(child.figmaId, "10:2");
+    assert.equal(child.direction, "rtl");
     assert.equal(child.text, "جستجو در سامانه...");
-    assert.equal(child.styles["font-family"], "IRANSansXFaNum");
-    assert.equal(child.styles["font-size"], "14px");
-    assert.equal(child.styles["text-align"], "right");
+    assert.equal(child.styles.fontFamily, "IRANSansXFaNum");
+    assert.equal(child.styles.fontSize, 14);
+    assert.equal(child.styles.fontWeight, 400);
+    assert.equal(child.styles.lineHeight, 20);
+    assert.equal(child.styles.color, "#1e293b");
     assert.deepEqual(child.rect, { x: 20, y: 16, width: 280, height: 32 });
   });
 });

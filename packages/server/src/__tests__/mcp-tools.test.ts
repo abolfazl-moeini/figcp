@@ -25,7 +25,7 @@ function walkTsFiles(dir: string): string[] {
   return out;
 }
 
-describe("MCP 4-tool server", () => {
+describe("MCP 7-tool server", () => {
   it("contains zero console.log calls in packages/server/src (stdout hygiene)", () => {
     const srcRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
     for (const file of walkTsFiles(srcRoot)) {
@@ -34,7 +34,7 @@ describe("MCP 4-tool server", () => {
     }
   });
 
-  it("exposes exactly 4 tools and returns native MCP image content + lintIssues", async () => {
+  it("exposes all 7 tools and returns native MCP image content + lintIssues", async () => {
     const transportNode = new TransportNode({ port: 0, token: TEST_TOKEN });
     await transportNode.start();
 

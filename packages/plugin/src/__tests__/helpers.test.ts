@@ -180,4 +180,52 @@ describe("plugin helpers", () => {
       /Font style "Black" not found.*Available installed styles: "Regular", "Bold"/,
     );
   });
+
+  it("binds Variable objects (not string IDs), creates variables, and applies text styles", async () => {
+    const varObj = { id: "v_1", name: "gap/sm", variableCollectionId: "c_1", setValueForMode: () => {} };
+    const boundCalls: Array<{ field: string; variable: unknown }> = [];
+    let appliedStyleId = "";
+
+    const helpers = createPluginHelpers({
+      loadFontAsync: async () => {},
+      listAvailableFontsAsync: async () => [],
+      getLocalTextStylesAsync: async () => [{ id: "ts_1", name: "Body/Regular" }],
+      variables: {
+        getLocalVariableCollectionsAsync: async () => [{ id: "c_1", name: "Tokens" }],
+        getLocalVariablesAsync: async () => [varObj],
+        getVariableByIdAsync: async (id: string) => (id === "v_1" ? (varObj as unknown as Variable) : null),
+        createVariableCollection: (name: string) => ({ id: "c_new", name, modes: [{ modeId: "m1", name: "Mode 1" }] }),
+        createVariable: (name: string) => ({ id: "v_new", name, setValueForMode: () => {} }) as unknown as Variable,
+        setBoundVariableForPaint: (p) => p,
+      },
+      currentPage: { selection: [] },
+      viewport: { scrollAndZoomIntoView: () => {} },
+    });
+
+    const node = {
+      setBoundVariable: (field: string, variable: Variable | null) => {
+        boundCalls.push({ field, variable });
+      },
+    };
+
+    await helpers.bindVariable(node, "itemSpacing", varObj as unknown as Variable);
+    await helpers.bindVariable(node, "paddingTop", "v_1");
+    assert.equal(boundCalls[0]?.variable, varObj);
+    assert.equal(boundCalls[1]?.variable, varObj);
+
+    const existingVar = await helpers.getOrCreateVariable("Tokens", "gap/sm", "FLOAT", 8);
+    assert.equal((existingVar as unknown as { id: string }).id, "v_1");
+
+    const newVar = await helpers.getOrCreateVariable("NewCol", "brand/accent", "COLOR", "#ff0000");
+    assert.equal((newVar as unknown as { id: string }).id, "v_new");
+
+    const textNode = {
+      setTextStyleIdAsync: async (id: string) => {
+        appliedStyleId = id;
+      },
+    };
+    const ok = await helpers.setTextStyleSafe(textNode, "Regular");
+    assert.equal(ok, true);
+    assert.equal(appliedStyleId, "ts_1");
+  });
 });

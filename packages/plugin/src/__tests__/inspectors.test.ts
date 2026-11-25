@@ -131,7 +131,19 @@ describe("plugin inspectors", () => {
     assert.equal(savedTitle, "Before Refactor");
   });
 
-  it("extracts design context with relativeRect and exports SVG/PNG assets cleanly", async () => {
+  it("extracts design context with relativeRect, effects, boundVariables, async instance, and exports SVG/PNG assets cleanly", async () => {
+    const childInstance = {
+      id: "200:2",
+      name: "SubmitBtn",
+      type: "INSTANCE",
+      visible: true,
+      absoluteBoundingBox: { x: 116, y: 224, width: 32, height: 24 },
+      getMainComponentAsync: async () => ({ id: "comp:1", name: "Button/Primary" }),
+      componentProperties: { Label: { value: "ثبت" } },
+      fills: [{ type: "SOLID", visible: true, color: { r: 0, g: 0.5, b: 1 }, boundVariables: { color: { id: "v_btn" } } }],
+      effects: [{ type: "DROP_SHADOW", color: { r: 0, g: 0, b: 0 }, radius: 4, offset: { x: 0, y: 2 } }],
+    };
+
     const mockNode = {
       id: "200:1",
       name: "Icon",
@@ -141,6 +153,7 @@ describe("plugin inspectors", () => {
       width: 48,
       height: 48,
       absoluteBoundingBox: { x: 100, y: 200, width: 48, height: 48 },
+      children: [childInstance],
       exportAsync: async (opts: { format: string }) => {
         if (opts.format === "PNG") {
           return new Uint8Array([137, 80, 78, 71]);
@@ -152,12 +165,19 @@ describe("plugin inspectors", () => {
     const mockFigma = {
       getNodeByIdAsync: async () => mockNode,
       currentPage: { selection: [mockNode] },
+      variables: {
+        getLocalVariablesAsync: async () => [{ id: "v_btn", name: "brand/primary" }],
+      },
     } as unknown as PluginAPI;
 
     const ctx = await handleGetDesignContext(mockFigma, { nodeId: "200:1" });
     assert.equal(ctx.root.id, "200:1");
     assert.equal(ctx.root.rect.width, 48);
-    assert.deepEqual(ctx.root.relativeRect, { x: 16, y: 24, width: 48, height: 48 });
+    assert.deepEqual(ctx.root.relativeRect, { x: 0, y: 0, width: 48, height: 48 });
+    assert.deepEqual(ctx.root.children?.[0]?.relativeRect, { x: 16, y: 24, width: 32, height: 24 });
+    assert.equal(ctx.root.children?.[0]?.component?.name, "Button/Primary");
+    assert.equal(ctx.root.children?.[0]?.fills?.[0]?.boundVariable, "brand/primary");
+    assert.equal(ctx.root.children?.[0]?.effects?.[0]?.type, "DROP_SHADOW");
 
     const svgAsset = await handleExportNodeAssets(mockFigma, { nodeId: "200:1", format: "SVG" });
     assert.equal(svgAsset.ok, true);

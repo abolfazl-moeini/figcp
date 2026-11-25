@@ -43,7 +43,7 @@ figcp/
 ## 3. Architecture & Data Flow
 
 ```text
-AI Client (Cursor / Claude Code / OpenCode)
+AI Client (Cursor / Antigravity / Claude Code / Codex CLI / OpenCode)
    │  MCP over stdio (JSON-RPC) — NEVER write logs to stdout! Use stderr only.
    ▼
 packages/server (Leader on 127.0.0.1:1994, or Follower proxying via HTTP /rpc)
@@ -66,14 +66,17 @@ Open Figma Desktop Document (multi-file routing via fileKey)
 
 ---
 
-## 4. Minimal MCP Tool Surface (4 Tools Only)
+## 4. Minimal MCP Tool Surface (7 Focused Tools)
 
-To avoid bloating the AI client's context window, `packages/server` exposes **only 4 focused MCP tools**:
+To avoid bloating the AI client's context window, `packages/server` exposes **7 focused MCP tools**:
 
-1. **`run_figma_js`**: Executes arbitrary Figma Plugin API JS inside the target file (`fileKey` optional when 1 file is connected). Runs inside a **serial queue** with configurable timeout (default 30s, max 180s), injects `figma` and `helpers`, captures `console.log/warn/error`, calls `figma.commitUndo()` on mutation, and returns `{ ok, result, logs, error, durationMs }`.
-2. **`inspect_design_system`**: Returns a compact, structured snapshot of the target file's Local Variable Collections (with values & aliases), Local Paint/Text/Effect Styles, Component Sets (with variant axes & component properties), and available fonts (filterable by query, e.g., `IRANSans`).
-3. **`inspect_node_bounds`**: Inspects a node subtree (depth-limited) returning `id`, `name`, `type`, `absoluteBoundingBox`, `absoluteRenderBounds`, Auto Layout settings, bound variable names, **deterministic lint findings** (overflow, sibling overlap, unbound raw colors/spacing), and optional inline PNG screenshot (`exportAsync`) returned as native MCP `ImageContent`.
-4. **`figma_undo`**: Reverts the last checkpointed `run_figma_js` mutation (via `figma.triggerUndo()`), or saves a named version snapshot (`figma.saveVersionHistoryAsync`) before risky refactors.
+1. **`figma_status`**: Reports bridge role, port, connected Figma files, and recent manual canvas edits (`manualChanges`).
+2. **`run_figma_js`**: Executes arbitrary Figma Plugin API JS inside the target file (`fileKey` optional when 1 file is connected). Runs inside a **serial queue** with configurable timeout (default 30s, max 180s), injects `figma` and `helpers`, captures `console.log/warn/error`, calls `figma.commitUndo()` on mutation, and returns `{ ok, result, logs, error, durationMs }`.
+3. **`inspect_design_system`**: Returns a compact, structured snapshot of the target file's Local Variable Collections (with resolved hex & alias chains), Local Paint/Text/Effect Styles, Component Sets & standalone Components, and available fonts (filterable by `fontQuery`, e.g., `IRANSans`), or exports W3C DTCG tokens (`format: "dtcg"`).
+4. **`inspect_node_bounds`**: Inspects a node subtree (depth-limited) returning `id`, `name`, `type`, `absoluteBoundingBox`, `absoluteRenderBounds`, Auto Layout settings, bound variable names, **deterministic lint findings** (overflow, sibling overlap, unbound raw colors/spacing, RTL alignment/font checks), and optional inline PNG screenshot (`exportAsync`) returned as native MCP `ImageContent`.
+5. **`figma_undo`**: Reverts the last checkpointed `run_figma_js` mutation (via `figma.triggerUndo()`), or saves a named version snapshot (`figma.saveVersionHistoryAsync`) before risky refactors.
+6. **`get_design_context`**: Extracts code-generation design context (Auto Layout flexbox, fills/strokes + bound variable names, effects, typography, async `getMainComponentAsync` metadata), matches `figcp.map.json` Local Code Connect mappings (supports `workspaceDir`), and optionally writes `spec.json` + `reference.png` (`exportUiLevelDir`) compatible with `ui-level`.
+7. **`export_node_assets`**: Exports a node as clean `SVG` or `PNG` via `exportAsync` (returned inline or written to `outputDir` with path-traversal protection).
 
 ---
 
@@ -81,8 +84,12 @@ To avoid bloating the AI client's context window, `packages/server` exposes **on
 
 Every agent writing code in `figcp` MUST respect these verified platform rules:
 
-1. **QuickJS Sandbox `eval` Rule**: Figma's plugin worker restricts `AsyncFunction` constructors; wrap dynamic code with `eval("(async function(figma, helpers) {\\n" + code + "\\n})")` ([reference](https://github.com/prism-ds/prism3/issues/2530)).
-2. **Serial Execution Queue**: The plugin worker is single-threaded. Never run two `run_figma_js` calls concurrently, or temporary `console.*` interception will collide across calls. Always restore original `console.*` in a `finally` block.
+1. **QuickJS Sandbox `eval` Rule**: Figma's plugin worker restricts `AsyncFunction` constructors; wrap dynamic code with `(0, eval)("(async function(figma, helpers, console, signal) {\\n" + code + "\\n})")` ([reference](https://github.com/prism-ds/prism3/issues/2530)).
+2. **Dynamic-Page Async Rules (`"documentAccess": "dynamic-page"`)**:
+   - Always use `await inst.getMainComponentAsync()` instead of sync `inst.mainComponent` (write-only under `dynamic-page`).
+   - Always pass a `Variable` object (not a string ID) to `node.setBoundVariable(field, variable)`.
+   - Never call `figma.on("documentchange", ...)` synchronously at startup without `await figma.loadAllPagesAsync()`; prefer `figma.currentPage.on("nodechange", ...)`.
+3. **Serial Execution Queue**: The plugin worker is single-threaded. Never run two `run_figma_js` calls concurrently, or temporary `console.*` interception will collide across calls. Always restore original `console.*` in a `finally` block.
 3. **Figma Starter Plan Limits**: Local plugins bypass REST API quotas and Enterprise-only Variables REST endpoints, but **cannot** bypass Starter plan product limits:
    - Supported: Single-mode Local Variables, `setBoundVariable` / `setBoundVariableForPaint`, Local Styles, Component Sets / Variants (`combineAsVariants`), Component Properties (`addComponentProperty`), basic Prototype Reactions (`setReactionsAsync`), and local fonts (`loadFontAsync`).
    - Not supported on Starter: Multi-mode Variables (e.g., adding a 2nd Light/Dark mode), Team Libraries, and conditional/variable Prototype expressions. Never write tests or helpers that assume multi-mode creation succeeds on Starter without graceful fallback.

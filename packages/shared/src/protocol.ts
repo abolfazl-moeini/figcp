@@ -282,4 +282,90 @@ export const FollowerRpcResponseSchema = z.object({
   error: z.string().optional(),
 });
 
+export const ExportNodeAssetsResultSchema = z.object({
+  ok: z.literal(true),
+  format: z.enum(["SVG", "PNG"]),
+  content: z.string(),
+  nodeId: z.string(),
+  nodeName: z.string(),
+});
+
+export const DesignContextNodeSchema: z.ZodType<Record<string, unknown>> = z.lazy(() =>
+  z.object({
+    id: z.string().min(1),
+    name: z.string(),
+    type: z.string().min(1),
+    rect: BoundingBoxSchema,
+    relativeRect: BoundingBoxSchema.optional(),
+    layoutMode: z.enum(["NONE", "HORIZONTAL", "VERTICAL"]).optional(),
+    itemSpacing: z.number().optional(),
+    padding: z
+      .object({
+        top: z.number(),
+        right: z.number(),
+        bottom: z.number(),
+        left: z.number(),
+      })
+      .optional(),
+    alignItems: z.string().optional(),
+    justifyContent: z.string().optional(),
+    primarySizing: z.string().optional(),
+    counterSizing: z.string().optional(),
+    fills: z
+      .array(
+        z.object({
+          hex: z.string().optional(),
+          opacity: z.number().optional(),
+          boundVariable: z.string().optional(),
+        }),
+      )
+      .optional(),
+    strokes: z
+      .array(
+        z.object({
+          hex: z.string().optional(),
+          opacity: z.number().optional(),
+          boundVariable: z.string().optional(),
+          width: z.number().optional(),
+        }),
+      )
+      .optional(),
+    cornerRadius: z.number().optional(),
+    effects: z
+      .array(
+        z.object({
+          type: z.string(),
+          colorHex: z.string().optional(),
+          radius: z.number().optional(),
+          offset: z.object({ x: z.number(), y: z.number() }).optional(),
+        }),
+      )
+      .optional(),
+    typography: z
+      .object({
+        characters: z.string().optional(),
+        fontFamily: z.string().optional(),
+        fontWeight: z.string().optional(),
+        fontSize: z.number().optional(),
+        lineHeight: z.union([z.string(), z.number()]).optional(),
+        letterSpacing: z.union([z.string(), z.number()]).optional(),
+        textAlign: z.string().optional(),
+      })
+      .optional(),
+    component: z
+      .object({
+        id: z.string(),
+        name: z.string(),
+        properties: z.record(z.unknown()).optional(),
+      })
+      .optional(),
+    children: z.array(DesignContextNodeSchema).optional(),
+  }),
+);
+
+export const GetDesignContextResultSchema = z.object({
+  root: DesignContextNodeSchema,
+  screenshotBase64: z.string().optional(),
+});
+
 export { normalizeNodeId } from "./utils.ts";

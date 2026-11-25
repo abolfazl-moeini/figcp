@@ -1,6 +1,8 @@
 import { lintNodeTree } from "@figcp/linter";
 import {
   DesignSystemSnapshotSchema,
+  ExportNodeAssetsResultSchema,
+  GetDesignContextResultSchema,
   InspectNodeBoundsResultSchema,
   normalizeNodeId,
   toDtcgTokens,
@@ -11,15 +13,15 @@ import {
 } from "@figcp/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { z } from "zod";
+import { resolveFigcpHome } from "./auth.ts";
 import { detectUiLevel, getUiLevelConfig } from "./cli/ui-level-addon.ts";
 import { loadCodeConnectMap, matchCodeConnect } from "./code-connect.ts";
 import type { TransportNode } from "./transport/node.ts";
 
 function getCacheDir(): string {
-  const dir = process.env.FIGCP_CACHE_DIR || join(homedir(), ".figcp", "cache");
+  const dir = process.env.FIGCP_CACHE_DIR || join(resolveFigcpHome(), "cache");
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
@@ -30,12 +32,16 @@ function pruneOldCache(cacheDir: string, maxFiles = 20, maxAgeMs = 24 * 60 * 60 
   try {
     const files = readdirSync(cacheDir);
     const now = Date.now();
-    const stats = files
-      .map((f) => {
-        const p = join(cacheDir, f);
-        return { path: p, mtime: statSync(p).mtimeMs };
-      })
-      .sort((a, b) => b.mtime - a.mtime);
+    const stats: Array<{ path: string; mtime: number }> = [];
+    for (const f of files) {
+      const p = join(cacheDir, f);
+      try {
+        stats.push({ path: p, mtime: statSync(p).mtimeMs });
+      } catch {
+        // Ignore deleted/broken entries
+      }
+    }
+    stats.sort((a, b) => b.mtime - a.mtime);
 
     for (let i = 0; i < stats.length; i++) {
       const item = stats[i]!;
@@ -57,6 +63,7 @@ export function spillLargePayload(
   payload: unknown,
   thresholdBytes = 65_536,
   customCacheDir?: string,
+  inlineMeta?: Record<string, unknown>,
 ): { text: string; fullOutputPath?: string } {
   const json = JSON.stringify(payload, null, 2);
   const bytes = Buffer.byteLength(json, "utf8");
@@ -84,6 +91,7 @@ export function spillLargePayload(
     fullOutputPath: filePath,
     summary: `Response payload (${Math.round(bytes / 1024)} KB) exceeded 64 KB threshold. Full JSON written to disk.`,
     preview,
+    ...(inlineMeta ? inlineMeta : {}),
   };
 
   return {
@@ -369,7 +377,11 @@ export function createFigcpMcpServer(transport: TransportNode): McpServer {
 
       const data = parsed.data;
       const lintIssues = lintNodeTree(data.node);
-      const spilled = spillLargePayload("inspect_node_bounds", { node: data.node, lintIssues });
+      const errorIssues = lintIssues.filter((i) => i.severity === "error");
+      const spilled = spillLargePayload("inspect_node_bounds", { node: data.node, lintIssues }, 65_536, undefined, {
+        lintIssueCount: lintIssues.length,
+        errorIssues: errorIssues.slice(0, 10),
+      });
 
       const content: Array<
         | { type: "text"; text: string }
@@ -430,16 +442,19 @@ export function createFigcpMcpServer(transport: TransportNode): McpServer {
       maxDepth: z.number().int().min(0).max(10).optional().describe("Maximum subtree traversal depth (default 6)."),
       includeScreenshot: z.boolean().optional().describe("Capture reference PNG screenshot of the design context root."),
       screenshotScale: z.number().min(0.5).max(4).optional().describe("PNG export scale factor (default 2)."),
+      workspaceDir: z.string().optional().describe("Frontend workspace directory to search for figcp.map.json (defaults to server cwd)."),
       exportUiLevelDir: z.string().optional().describe("Optional directory path to write spec.json and reference.png ready for ui-level."),
     },
-    async ({ nodeId, fileKey, maxDepth, includeScreenshot, screenshotScale, exportUiLevelDir }) => {
+    async ({ nodeId, fileKey, maxDepth, includeScreenshot, screenshotScale, workspaceDir, exportUiLevelDir }) => {
       const normalized = nodeId ? normalizeNodeId(nodeId) : undefined;
+      const effectiveScreenshot = includeScreenshot ?? Boolean(exportUiLevelDir);
+      const effectiveScale = screenshotScale ?? 2;
       const response = await safeSendCommand(transport, {
         method: "get_design_context",
         params: {
           ...(normalized ? { nodeId: normalized } : {}),
           ...(maxDepth !== undefined ? { maxDepth } : {}),
-          ...(includeScreenshot !== undefined ? { includeScreenshot } : {}),
+          ...(effectiveScreenshot ? { includeScreenshot: true } : {}),
           ...(screenshotScale !== undefined ? { screenshotScale } : {}),
         },
         fileKey,
@@ -452,11 +467,31 @@ export function createFigcpMcpServer(transport: TransportNode): McpServer {
         };
       }
 
-      const rawResult = response.result as { root: DesignContextNode; screenshotBase64?: string };
+      const parsed = GetDesignContextResultSchema.safeParse(response.result);
+      if (!parsed.success) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  name: "ValidationError",
+                  message: `Invalid get_design_context payload: ${parsed.error.issues[0]?.message ?? "schema mismatch"}`,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+
+      const rawResult = parsed.data as unknown as { root: DesignContextNode; screenshotBase64?: string };
       const rootNode = rawResult.root;
 
       // 1. Resolve Code Connect mappings (figcp.map.json)
-      const codeConnectMap = loadCodeConnectMap();
+      const codeConnectMap = loadCodeConnectMap(workspaceDir);
       function attachCodeConnect(node: DesignContextNode) {
         if (node.component?.name) {
           const matched = matchCodeConnect(codeConnectMap, node.component.name);
@@ -477,30 +512,38 @@ export function createFigcpMcpServer(transport: TransportNode): McpServer {
       if (exportUiLevelDir) {
         const destDir = resolve(exportUiLevelDir);
         mkdirSync(destDir, { recursive: true });
-        const spec = toUiLevelNormalizedSpec(rootNode);
-        const specPath = join(destDir, "spec.json");
-        writeFileSync(specPath, `${JSON.stringify(spec, null, 2)}\n`, "utf8");
+        const hasPng = Boolean(rawResult.screenshotBase64);
         if (rawResult.screenshotBase64) {
           const refImgPath = join(destDir, "reference.png");
           writeFileSync(refImgPath, Buffer.from(rawResult.screenshotBase64, "base64"));
         }
+        const spec = toUiLevelNormalizedSpec(rootNode, undefined, undefined, {
+          deviceScaleFactor: effectiveScale,
+          ...(hasPng ? { imagePath: "reference.png" } : {}),
+        });
+        const specPath = join(destDir, "spec.json");
+        writeFileSync(specPath, `${JSON.stringify(spec, null, 2)}\n`, "utf8");
         uiLevelExportPath = specPath;
       }
 
       const uiLevelConfig = getUiLevelConfig();
       const uiLevelInstalled = detectUiLevel();
+      const uiLevelMeta = {
+        available: uiLevelInstalled,
+        status: uiLevelConfig.uiLevel ?? "disabled",
+        ...(uiLevelExportPath ? { exportedSpecPath: uiLevelExportPath } : {}),
+      };
 
       const payload = {
         root: rootNode,
         codeConnectMapLoaded: Boolean(codeConnectMap),
-        uiLevel: {
-          available: uiLevelInstalled,
-          status: uiLevelConfig.uiLevel ?? "disabled",
-          ...(uiLevelExportPath ? { exportedSpecPath: uiLevelExportPath } : {}),
-        },
+        uiLevel: uiLevelMeta,
       };
 
-      const spilled = spillLargePayload("get_design_context", payload);
+      const spilled = spillLargePayload("get_design_context", payload, 65_536, undefined, {
+        codeConnectMapLoaded: Boolean(codeConnectMap),
+        uiLevel: uiLevelMeta,
+      });
       const content: Array<
         | { type: "text"; text: string }
         | { type: "image"; data: string; mimeType: string }
@@ -554,13 +597,27 @@ export function createFigcpMcpServer(transport: TransportNode): McpServer {
         };
       }
 
-      const res = response.result as {
-        ok: true;
-        format: "SVG" | "PNG";
-        content: string;
-        nodeId: string;
-        nodeName: string;
-      };
+      const parsedAsset = ExportNodeAssetsResultSchema.safeParse(response.result);
+      if (!parsedAsset.success) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  name: "ValidationError",
+                  message: `Invalid export_node_assets payload: ${parsedAsset.error.issues[0]?.message ?? "schema mismatch"}`,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+
+      const res = parsedAsset.data;
 
       if (outputDir) {
         const destDir = resolve(outputDir);
@@ -570,7 +627,8 @@ export function createFigcpMcpServer(transport: TransportNode): McpServer {
         const targetPath = join(destDir, `${safeName}.${ext}`);
 
         // Security check: ensure targetPath is strictly inside destDir
-        if (!resolve(targetPath).startsWith(destDir)) {
+        const resolvedTarget = resolve(targetPath);
+        if (resolvedTarget !== destDir && !resolvedTarget.startsWith(destDir + sep)) {
           throw new Error("Invalid output filename or path traversal detected.");
         }
 

@@ -46,6 +46,9 @@ export interface MinimalFigmaForHelpers {
   variables: {
     getLocalVariableCollectionsAsync(): Promise<Array<{ id: string; name: string }>>;
     getLocalVariablesAsync(): Promise<Array<{ id: string; name: string; variableCollectionId: string }>>;
+    getVariableByIdAsync?(id: string): Promise<Variable | null>;
+    createVariableCollection?(name: string): { id: string; name: string; modes: Array<{ modeId: string; name: string }> };
+    createVariable?(name: string, collection: unknown, resolvedType: string): Variable;
     setBoundVariableForPaint(paint: SolidPaint, field: "color", variable: Variable | null): SolidPaint;
   };
   getLocalPaintStylesAsync?(): Promise<Array<{ id: string; name: string }>>;
@@ -120,7 +123,7 @@ export function createPluginHelpers(figmaApi: MinimalFigmaForHelpers) {
     resizeFrameSafe(
       frame: {
         resize: (width: number, height: number) => void;
-        layoutMode?: "NONE" | "HORIZONTAL" | "VERTICAL";
+        layoutMode?: "NONE" | "HORIZONTAL" | "VERTICAL" | "GRID";
         primaryAxisSizingMode?: "FIXED" | "AUTO";
         counterAxisSizingMode?: "FIXED" | "AUTO";
       },
@@ -130,10 +133,12 @@ export function createPluginHelpers(figmaApi: MinimalFigmaForHelpers) {
     ): void {
       // Always resize BEFORE applying sizing modes because Figma's resize() resets both to FIXED.
       frame.resize(width, height);
-      // Guard against layoutMode NONE where setting sizing modes throws in Figma
-      if (frame.layoutMode !== "NONE") {
-        if (sizing.primary && "primaryAxisSizingMode" in frame) frame.primaryAxisSizingMode = sizing.primary;
-        if (sizing.counter && "counterAxisSizingMode" in frame) frame.counterAxisSizingMode = sizing.counter;
+      // Guard against layoutMode NONE / GRID / undefined where setting sizing modes throws in Figma
+      if (frame.layoutMode === "HORIZONTAL" || frame.layoutMode === "VERTICAL" || frame.layoutMode === undefined) {
+        if (frame.layoutMode !== undefined || ("primaryAxisSizingMode" in frame && "counterAxisSizingMode" in frame)) {
+          if (sizing.primary && "primaryAxisSizingMode" in frame) frame.primaryAxisSizingMode = sizing.primary;
+          if (sizing.counter && "counterAxisSizingMode" in frame) frame.counterAxisSizingMode = sizing.counter;
+        }
       }
     },
 
@@ -179,15 +184,86 @@ export function createPluginHelpers(figmaApi: MinimalFigmaForHelpers) {
       if (options.counterAlign) frame.counterAxisAlignItems = options.counterAlign;
     },
 
-    bindVariable(
-      node: { setBoundVariable?: (field: string, variableId: string) => void },
+    async bindVariable(
+      node: { setBoundVariable?: (field: string, variable: Variable | null) => void },
       field: string,
-      variable: { id: string } | string,
-    ): void {
-      const varId = typeof variable === "string" ? variable : variable.id;
-      if (typeof node.setBoundVariable === "function") {
-        node.setBoundVariable(field, varId);
+      variable: Variable | string | null,
+    ): Promise<void> {
+      if (typeof node.setBoundVariable !== "function") return;
+      if (variable === null) {
+        node.setBoundVariable(field, null);
+        return;
       }
+      if (typeof variable === "string") {
+        if (typeof figmaApi.variables.getVariableByIdAsync === "function") {
+          const resolved = await figmaApi.variables.getVariableByIdAsync(variable);
+          if (!resolved) {
+            throw new Error(`Variable "${variable}" not found.`);
+          }
+          node.setBoundVariable(field, resolved);
+          return;
+        }
+        const allVars = await figmaApi.variables.getLocalVariablesAsync();
+        const found = allVars.find((v) => v.id === variable);
+        if (!found) {
+          throw new Error(`Variable "${variable}" not found.`);
+        }
+        node.setBoundVariable(field, found as unknown as Variable);
+        return;
+      }
+      node.setBoundVariable(field, variable);
+    },
+
+    async getOrCreateVariable(
+      collectionName: string,
+      varName: string,
+      resolvedType: "COLOR" | "FLOAT" | "STRING" | "BOOLEAN",
+      value: unknown,
+    ): Promise<Variable> {
+      const [collections, allVars] = await Promise.all([
+        figmaApi.variables.getLocalVariableCollectionsAsync(),
+        figmaApi.variables.getLocalVariablesAsync(),
+      ]);
+      let col = collections.find((c) => c.name === collectionName) as
+        | { id: string; name: string; modes: Array<{ modeId: string; name: string }> }
+        | undefined;
+      if (!col) {
+        if (typeof figmaApi.variables.createVariableCollection !== "function") {
+          throw new Error(`Collection "${collectionName}" not found and createVariableCollection is unavailable.`);
+        }
+        col = figmaApi.variables.createVariableCollection(collectionName);
+      }
+      const existing = allVars.find((v) => v.variableCollectionId === col!.id && v.name === varName);
+      if (existing) {
+        return existing as unknown as Variable;
+      }
+      if (typeof figmaApi.variables.createVariable !== "function") {
+        throw new Error(`Variable "${varName}" not found and createVariable is unavailable.`);
+      }
+      const created = figmaApi.variables.createVariable(varName, col, resolvedType);
+      const defaultModeId = col.modes?.[0]?.modeId;
+      if (defaultModeId && value !== undefined && typeof (created as { setValueForMode?: unknown }).setValueForMode === "function") {
+        const formatted =
+          resolvedType === "COLOR" && typeof value === "string" ? hexToRgba(value) : value;
+        (created as { setValueForMode: (m: string, v: unknown) => void }).setValueForMode(defaultModeId, formatted);
+      }
+      return created;
+    },
+
+    async setTextStyleSafe(
+      textNode: { textStyleId?: string; setTextStyleIdAsync?: (id: string) => Promise<void> },
+      styleName: string,
+    ): Promise<boolean> {
+      if (typeof figmaApi.getLocalTextStylesAsync !== "function") return false;
+      const styles = await figmaApi.getLocalTextStylesAsync();
+      const match = styles.find((s) => s.name === styleName || s.name.endsWith(`/${styleName}`));
+      if (!match) return false;
+      if (typeof textNode.setTextStyleIdAsync === "function") {
+        await textNode.setTextStyleIdAsync(match.id);
+      } else {
+        textNode.textStyleId = match.id;
+      }
+      return true;
     },
 
     async findStyle(name: string, type: "paint" | "text" | "effect" = "paint") {

@@ -76,23 +76,34 @@ export async function runDoctor(options: {
   });
 
   // 4. Client MCP Configurations
-  const clients = [
-    { name: "Cursor", path: join(userHome, ".cursor", "mcp.json") },
-    { name: "Antigravity", path: join(userHome, ".gemini", "antigravity", "mcp_config.json") },
-    { name: "Claude Code", path: join(userHome, ".claude.json") },
-    { name: "Codex CLI", path: join(userHome, ".codex", "config.toml") },
-    { name: "OpenCode", path: join(userHome, ".config", "opencode", "opencode.json") },
+  const clients: Array<{ name: string; path: string; type: "json" | "toml" }> = [
+    { name: "Cursor", path: join(userHome, ".cursor", "mcp.json"), type: "json" },
+    { name: "Antigravity", path: join(userHome, ".gemini", "antigravity", "mcp_config.json"), type: "json" },
+    { name: "Claude Code", path: join(userHome, ".claude.json"), type: "json" },
+    { name: "Codex CLI", path: join(userHome, ".codex", "config.toml"), type: "toml" },
+    { name: "OpenCode", path: join(userHome, ".config", "opencode", "opencode.json"), type: "json" },
   ];
   const configuredClients: string[] = [];
   for (const client of clients) {
     if (existsSync(client.path)) {
       try {
         const text = readFileSync(client.path, "utf8");
-        if (text.includes("figcp")) {
-          configuredClients.push(client.name);
+        if (client.type === "toml") {
+          if (/^\s*\[mcp_servers\.figcp\]/m.test(text)) {
+            configuredClients.push(client.name);
+          }
+        } else {
+          const parsed = JSON.parse(text) as Record<string, unknown> | null;
+          if (parsed && typeof parsed === "object") {
+            const mcpServers = parsed.mcpServers as Record<string, unknown> | undefined;
+            const mcp = parsed.mcp as { servers?: Record<string, unknown> } | undefined;
+            if ((mcpServers && "figcp" in mcpServers) || (mcp?.servers && "figcp" in mcp.servers)) {
+              configuredClients.push(client.name);
+            }
+          }
         }
       } catch {
-        // Skip unreadable files
+        // Skip unreadable or invalid files
       }
     }
   }

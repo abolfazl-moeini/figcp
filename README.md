@@ -24,10 +24,11 @@ npm run doctor    # verify local environment and bridge health
 2. Select `~/.figcp/plugin/manifest.json` (run `node packages/server/dist/index.js --print-path` to copy the path).
 3. Run the **figcp** plugin in Figma Desktop and restart your MCP client.
 
-`npm run setup` installs the plugin with a baked loopback token (`~/.figcp/token`) and registers `figcp` in your MCP clients (with automatic `.figcp.bak` backups):
+`npm run setup` installs the plugin with a baked loopback token (`~/.figcp/token`), installs `SKILL.md`, and registers `figcp` in your MCP clients (with automatic `.figcp.bak` backups):
 - **Cursor**: `~/.cursor/mcp.json`
 - **Antigravity**: `~/.gemini/antigravity/mcp_config.json`
 - **Claude Code**: `~/.claude.json` (configured only if Claude Code is present)
+- **Codex CLI**: `~/.codex/config.toml` (configured only if Codex CLI is present)
 - **OpenCode**: `~/.config/opencode/opencode.json`
 
 ---
@@ -62,7 +63,7 @@ npm run doctor    # verify local environment and bridge health
      "SearchBox": { "file": "src/components/SearchBox.tsx", "export": "SearchBox" }
    }
    ```
-2. **Extract Context**: Call `get_design_context` to receive CSS longhands, relative geometries, and attached `codeConnect` hints.
+2. **Extract Context**: Call `get_design_context` (pass `workspaceDir` if the MCP client runs outside your project root) to receive CSS properties, relative geometries, bound token names, and attached `codeConnect` hints.
 3. **Export Assets**: Call `export_node_assets` (`format: "SVG"`, `outputDir: "src/assets/icons"`).
 
 ---
@@ -72,8 +73,8 @@ npm run doctor    # verify local environment and bridge health
 `figcp` core is 100% self-contained and requires zero heavy browser or native image dependencies. You can optionally pair it with:
 
 - **`ui-level`** (Visual & DOM Verification):
-  - When enabled, `get_design_context` exports `spec.json` and `reference.png` ready for offline Playwright/CDP DOM geometry + CIEDE2000 ΔE verification.
-  - Enable explicitly with: `node packages/server/dist/index.js --enable-ui-level`.
+  - When enabled, `get_design_context` exports `spec.json` (`NormalizedSpec`) and `reference.png` ready for offline Playwright/CDP DOM geometry + CIEDE2000 ΔE verification.
+  - Enable explicitly with: `node packages/server/dist/index.js --setup --with-ui-level` (or `--enable-ui-level`). Use `--no-prompt` to skip interactive prompts during setup.
 - **Terrazzo** / **Tokens Studio**:
   - Export DTCG tokens via `inspect_design_system({ format: "dtcg" })` and transform to Tailwind v4 / CSS variables with Terrazzo.
 - **SVGO**:
