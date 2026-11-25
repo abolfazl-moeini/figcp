@@ -127,4 +127,39 @@ describe("@figcp/linter", () => {
     assert.ok(rules.includes("truncated-subtree"));
     assert.equal(issues.some((i) => i.nodeId === "4:2" || i.nodeId === "4:3"), false);
   });
+
+  it("flags rtl-font-mismatch when Persian text uses Latin default fonts", () => {
+    const textNode: NodeBoundsSummary = {
+      id: "5:1",
+      name: "PersianInter",
+      type: "TEXT",
+      characters: "متن با فونت پیش‌فرض",
+      textAlignHorizontal: "RIGHT",
+      fontName: { family: "Inter", style: "Regular" },
+    };
+    const issues = lintNodeTree(textNode);
+    assert.ok(issues.some((i) => i.rule === "rtl-font-mismatch"));
+  });
+
+  it("downgrades child-overflow to info when child has layoutPositioning ABSOLUTE", () => {
+    const parent: NodeBoundsSummary = {
+      id: "6:1",
+      name: "Parent",
+      type: "FRAME",
+      absoluteBoundingBox: { x: 0, y: 0, width: 100, height: 100 },
+      children: [
+        {
+          id: "6:2",
+          name: "Badge",
+          type: "FRAME",
+          layoutPositioning: "ABSOLUTE",
+          absoluteBoundingBox: { x: 90, y: -10, width: 24, height: 24 },
+        },
+      ],
+    };
+    const issues = lintNodeTree(parent);
+    const overflow = issues.find((i) => i.rule === "child-overflow");
+    assert.ok(overflow);
+    assert.equal(overflow.severity, "info");
+  });
 });

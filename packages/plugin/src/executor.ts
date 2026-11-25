@@ -104,6 +104,44 @@ function createGuardedFigmaProxy<T>(target: T, state: ExecutionState): T {
   }
 
   const cache = new WeakMap<object, unknown>();
+  const proxyToTarget = new WeakMap<object, unknown>();
+
+  const unwrap = (val: unknown, seen = new WeakSet<object>()): unknown => {
+    if (val === null || typeof val !== "object") return val;
+    if (seen.has(val)) return val;
+
+    // If it's a proxy, extract the underlying target directly
+    let current = val;
+    while (typeof current === "object" && current !== null && proxyToTarget.has(current)) {
+      current = proxyToTarget.get(current) as object;
+    }
+    if (current !== val) {
+      return current;
+    }
+
+    if (Array.isArray(val)) {
+      seen.add(val);
+      return val.map((item) => unwrap(item, seen));
+    }
+
+    const proto = Object.getPrototypeOf(val);
+    if (proto === Object.prototype) {
+      seen.add(val);
+      let cloned = false;
+      const res: Record<string, unknown> = {};
+      for (const k of Object.keys(val)) {
+        const orig = (val as Record<string, unknown>)[k];
+        const unwrappedProp = unwrap(orig, seen);
+        res[k] = unwrappedProp;
+        if (unwrappedProp !== orig) {
+          cloned = true;
+        }
+      }
+      return cloned ? res : val;
+    }
+
+    return val;
+  };
 
   const wrap = (obj: unknown): unknown => {
     if (obj === null || typeof obj !== "object") return obj;
@@ -125,7 +163,8 @@ function createGuardedFigmaProxy<T>(target: T, state: ExecutionState): T {
             if (MUTATING_METHOD_RE.test(propName)) {
               state.mutated = true;
             }
-            const res = (value as (...a: unknown[]) => unknown).apply(innerTarget, args);
+            const unwrappedArgs = args.map((arg) => unwrap(arg));
+            const res = (value as (...a: unknown[]) => unknown).apply(innerTarget, unwrappedArgs);
             if (res && typeof (res as PromiseLike<unknown>).then === "function") {
               return Promise.resolve(res).then((resolved) => {
                 if (state.aborted) {
@@ -144,11 +183,13 @@ function createGuardedFigmaProxy<T>(target: T, state: ExecutionState): T {
           throw new Error("Plugin script aborted after timeout");
         }
         state.mutated = true;
-        return Reflect.set(innerTarget, prop, newValue, innerTarget);
+        const unwrappedValue = unwrap(newValue);
+        return Reflect.set(innerTarget, prop, unwrappedValue, innerTarget);
       },
     });
 
     cache.set(obj, proxy);
+    proxyToTarget.set(proxy, obj);
     return proxy;
   };
 
@@ -172,7 +213,7 @@ export class SerialPluginExecutor {
   execute(
     code: string,
     figmaApi: unknown,
-    helpersApi: unknown,
+    helpersApi: unknown | ((guardedFigma: unknown) => unknown),
     options: ExecutionOptions = {},
   ): Promise<ExecutionResult> {
     return this.runTask(() => this.runExclusive(code, figmaApi, helpersApi, options));
@@ -181,7 +222,7 @@ export class SerialPluginExecutor {
   private async runExclusive(
     code: string,
     figmaApi: unknown,
-    helpersApi: unknown,
+    helpersApi: unknown | ((guardedFigma: unknown) => unknown),
     options: ExecutionOptions,
   ): Promise<ExecutionResult> {
     const executionId = ++this.activeId;
@@ -223,6 +264,10 @@ export class SerialPluginExecutor {
       console.error = (...args: unknown[]) => pushLog("error", args);
 
       const guardedFigma = createGuardedFigmaProxy(figmaApi, state);
+      const resolvedHelpers =
+        typeof helpersApi === "function"
+          ? (helpersApi as (f: unknown) => unknown)(guardedFigma)
+          : helpersApi;
 
       // Use indirect eval so it works inside Figma's QuickJS sandbox where
       // AsyncFunction constructor is restricted.
@@ -231,7 +276,7 @@ export class SerialPluginExecutor {
       ) as (f: unknown, h: unknown, c: unknown, s: unknown) => Promise<unknown>;
 
       const execPromise = Promise.resolve().then(() =>
-        compiledFn(guardedFigma, helpersApi, scopedConsole, signal),
+        compiledFn(guardedFigma, resolvedHelpers, scopedConsole, signal),
       );
 
       let rawResult: unknown;

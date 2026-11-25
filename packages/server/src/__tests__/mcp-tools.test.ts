@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { FakeFigmaPlugin } from "../../../../tests/helpers/fake-plugin.ts";
-import { createFigcpMcpServer } from "../mcp.ts";
+import { createFigcpMcpServer, spillLargePayload } from "../mcp.ts";
 import { TransportNode } from "../transport/node.ts";
 
 const TEST_TOKEN = "99998888777766665555444433332222";
@@ -85,6 +85,42 @@ describe("MCP 4-tool server", () => {
         if (req.method === "figma_undo") {
           return { ok: true, result: { ok: true, action: "undo" }, logs: [] };
         }
+        if (req.method === "figma_status") {
+          return {
+            ok: true,
+            result: { fileKey: "ds-file", changeSeq: 0, manualChanges: [] },
+            logs: [],
+          };
+        }
+        if (req.method === "get_design_context") {
+          return {
+            ok: true,
+            result: {
+              root: {
+                id: "100:1",
+                name: "Search Box",
+                type: "COMPONENT",
+                rect: { x: 0, y: 0, width: 340, height: 44 },
+                layoutMode: "HORIZONTAL",
+                component: { id: "comp-1", name: "SearchBox" },
+              },
+            },
+            logs: [],
+          };
+        }
+        if (req.method === "export_node_assets") {
+          return {
+            ok: true,
+            result: {
+              ok: true,
+              format: req.params.format ?? "SVG",
+              content: "<svg></svg>",
+              nodeId: "100:1",
+              nodeName: "SearchIcon",
+            },
+            logs: [],
+          };
+        }
         return { ok: false, error: { name: "Error", message: "Unknown" }, logs: [] };
       },
     });
@@ -101,11 +137,40 @@ describe("MCP 4-tool server", () => {
       const listed = await client.listTools();
       const names = listed.tools.map((t) => t.name).sort();
       assert.deepEqual(names, [
+        "export_node_assets",
+        "figma_status",
         "figma_undo",
+        "get_design_context",
         "inspect_design_system",
         "inspect_node_bounds",
         "run_figma_js",
       ]);
+
+      const dtcgRes = await client.callTool({
+        name: "inspect_design_system",
+        arguments: { format: "dtcg" },
+      });
+      assert.equal(dtcgRes.isError ?? false, false);
+
+      const ctxRes = await client.callTool({
+        name: "get_design_context",
+        arguments: { nodeId: "100:1" },
+      });
+      assert.equal(ctxRes.isError ?? false, false);
+      const ctxText = (ctxRes.content as Array<{ text: string }>)[0]!.text;
+      assert.ok(ctxText.includes("SearchBox"));
+
+      const assetRes = await client.callTool({
+        name: "export_node_assets",
+        arguments: { nodeId: "100:1", format: "SVG" },
+      });
+      assert.equal(assetRes.isError ?? false, false);
+
+      const statusRes = await client.callTool({ name: "figma_status", arguments: {} });
+      assert.equal(statusRes.isError ?? false, false);
+      const statusText = (statusRes.content as Array<{ text: string }>)[0]!.text;
+      assert.ok(statusText.includes("connectedFiles"));
+      assert.ok(statusText.includes("ds-file"));
 
       const runRes = await client.callTool({
         name: "run_figma_js",
@@ -175,5 +240,17 @@ describe("MCP 4-tool server", () => {
       await plugin.disconnect();
       await transportNode.stop();
     }
+  });
+
+  it("spills payloads > 64 KB to disk with compact summary and preserves full file", () => {
+    const hugePayload = {
+      items: Array.from({ length: 2000 }, (_, i) => ({ id: `node-${i}`, data: "x".repeat(50) })),
+    };
+    const spilled = spillLargePayload("test_tool", hugePayload, 1024);
+    assert.ok(spilled.fullOutputPath);
+    const parsed = JSON.parse(spilled.text);
+    assert.equal(parsed.spilled, true);
+    assert.equal(parsed.tool, "test_tool");
+    assert.ok(parsed.byteLength > 1024);
   });
 });

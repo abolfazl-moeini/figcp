@@ -194,4 +194,66 @@ describe("SerialPluginExecutor", () => {
     assert.equal(tRes, "inspected");
     assert.deepEqual(order, ["execute", "task"]);
   });
+
+  it("unwraps proxy instances passed into native methods or property setters", async () => {
+    const rawChild = { id: "2:1", type: "TEXT", name: "Text" };
+    let receivedChild: unknown;
+    let receivedSelection: unknown;
+    const rawFrame = {
+      id: "1:1",
+      type: "FRAME",
+      name: "Frame",
+      appendChild: (node: unknown) => {
+        receivedChild = node;
+      },
+    };
+    const mockFigma = {
+      currentPage: {
+        set selection(val: unknown) {
+          receivedSelection = val;
+        },
+      },
+      createFrame: () => rawFrame,
+      createText: () => rawChild,
+      commitUndo: () => {},
+    };
+    const executor = new SerialPluginExecutor();
+    const res = await executor.execute(
+      `const f = figma.createFrame();
+       const t = figma.createText();
+       f.appendChild(t);
+       figma.currentPage.selection = [t];
+       return true;`,
+      mockFigma,
+      {},
+    );
+    assert.equal(res.ok, true);
+    assert.equal(receivedChild, rawChild);
+    assert.ok(Array.isArray(receivedSelection));
+    assert.equal((receivedSelection as unknown[])[0], rawChild);
+  });
+
+  it("binds helpers dynamically via factory and enforces abort and mutate-then-throw commitUndo", async () => {
+    let undoCommitted = 0;
+    const rawFrame = { id: "1:1", type: "FRAME" };
+    const mockFigma = {
+      createFrame: () => rawFrame,
+      commitUndo: () => {
+        undoCommitted++;
+      },
+    };
+    const helpersFactory = (guardedFigma: any) => ({
+      buildFrame: () => {
+        guardedFigma.createFrame();
+      },
+    });
+    const executor = new SerialPluginExecutor();
+    const res = await executor.execute(
+      `helpers.buildFrame(); throw new Error("helper fail");`,
+      mockFigma,
+      helpersFactory,
+    );
+    assert.equal(res.ok, false);
+    assert.equal(undoCommitted, 1);
+  });
 });

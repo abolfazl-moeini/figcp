@@ -35,7 +35,7 @@ export class PluginBridge {
   private readonly heartbeatIntervalMs: number;
 
   constructor(options: PluginBridgeOptions = {}) {
-    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 15_000;
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 30_000;
   }
 
   private ensureHeartbeat(): void {
@@ -100,6 +100,12 @@ export class PluginBridge {
     });
 
     ws.on("message", (raw) => {
+      if (boundFileKey) {
+        const conn = this.connections.get(boundFileKey);
+        if (conn && conn.ws === ws) {
+          conn.isAlive = true;
+        }
+      }
       let parsed: unknown;
       try {
         parsed = JSON.parse(raw.toString("utf8"));

@@ -117,4 +117,67 @@ describe("plugin helpers", () => {
       assert.equal(res.suggestions[0]?.family, "IRANSansXFaNum");
     }
   });
+
+  it("guards resizeFrameSafe on layoutMode NONE without setting sizing modes", () => {
+    const order: string[] = [];
+    const helpers = createPluginHelpers({
+      loadFontAsync: async () => {},
+      listAvailableFontsAsync: async () => [],
+      variables: {
+        getLocalVariableCollectionsAsync: async () => [],
+        getLocalVariablesAsync: async () => [],
+        setBoundVariableForPaint: (p) => p,
+      },
+      currentPage: { selection: [] },
+      viewport: { scrollAndZoomIntoView: () => {} },
+    });
+
+    const frame = {
+      layoutMode: "NONE" as const,
+      resize: (w: number, h: number) => {
+        order.push(`resize:${w}x${h}`);
+      },
+      set primaryAxisSizingMode(_: any) {
+        order.push("trap:primary");
+      },
+      set counterAxisSizingMode(_: any) {
+        order.push("trap:counter");
+      },
+    };
+
+    helpers.resizeFrameSafe(frame, 200, 100, { primary: "AUTO", counter: "FIXED" });
+    assert.deepEqual(order, ["resize:200x100"]);
+  });
+
+  it("enforces strict requireFont preflight", async () => {
+    const helpers = createPluginHelpers({
+      loadFontAsync: async () => {},
+      listAvailableFontsAsync: async () => [
+        { fontName: { family: "IRANSansXFaNum", style: "Regular" } },
+        { fontName: { family: "IRANSansXFaNum", style: "Bold" } },
+      ],
+      variables: {
+        getLocalVariableCollectionsAsync: async () => [],
+        getLocalVariablesAsync: async () => [],
+        setBoundVariableForPaint: (p) => p,
+      },
+      currentPage: { selection: [] },
+      viewport: { scrollAndZoomIntoView: () => {} },
+    });
+
+    // Exact match succeeds
+    await helpers.requireFont({ family: "IRANSansXFaNum", style: "Bold" });
+
+    // Missing family throws
+    await assert.rejects(
+      helpers.requireFont({ family: "NonExistentFont", style: "Regular" }),
+      /Font family "NonExistentFont" is not installed/,
+    );
+
+    // Missing style throws with list of available styles
+    await assert.rejects(
+      helpers.requireFont({ family: "IRANSansXFaNum", style: "Black" }),
+      /Font style "Black" not found.*Available installed styles: "Regular", "Bold"/,
+    );
+  });
 });

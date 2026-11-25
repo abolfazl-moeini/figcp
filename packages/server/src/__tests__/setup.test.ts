@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { runDoctor } from "../cli/doctor.ts";
 import { runSetup } from "../cli/setup.ts";
 
 describe("CLI --setup installer", () => {
@@ -103,5 +104,12 @@ describe("CLI --setup installer", () => {
       rmSync(emptyDist, { recursive: true, force: true });
       rmSync(validDist, { recursive: true, force: true });
     }
+  });
+
+  it("diagnoses environment health via runDoctor", async () => {
+    const report = await runDoctor();
+    assert.ok(Array.isArray(report.checks));
+    assert.ok(report.checks.some((c) => c.name === "Node.js Runtime" && c.ok));
+    assert.ok(report.checks.some((c) => c.name === "Bridge Health"));
   });
 });

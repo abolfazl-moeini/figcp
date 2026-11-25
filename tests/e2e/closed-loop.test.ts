@@ -103,6 +103,32 @@ describe("E2E Closed-Loop Pipeline 1", () => {
           case "figma_undo":
             undoCalls++;
             return { ok: true, result: { ok: true, action: "undo" }, logs: [] };
+          case "get_design_context":
+            return {
+              ok: true,
+              result: {
+                root: {
+                  id: "5031:4449",
+                  name: "Search Box",
+                  type: "COMPONENT",
+                  rect: { x: 0, y: 0, width: 340, height: 44 },
+                  layoutMode: "HORIZONTAL",
+                },
+              },
+              logs: [],
+            };
+          case "export_node_assets":
+            return {
+              ok: true,
+              result: {
+                ok: true,
+                format: "SVG",
+                content: "<svg><path d=\"\" /></svg>",
+                nodeId: "5031:4449",
+                nodeName: "SearchBox",
+              },
+              logs: [],
+            };
           default:
             return { ok: false, error: { name: "Error", message: "Unexpected" }, logs: [] };
         }
@@ -149,6 +175,22 @@ describe("E2E Closed-Loop Pipeline 1", () => {
       // 4. Undo
       await client.callTool({ name: "figma_undo", arguments: { action: "undo" } });
       assert.equal(undoCalls, 1);
+
+      // 5. Bidirectional: Get design context (Figma -> Code)
+      const ctxRes = await client.callTool({
+        name: "get_design_context",
+        arguments: { nodeId: "5031:4449" },
+      });
+      const ctxJson = JSON.parse((ctxRes.content as Array<{ text: string }>)[0]!.text);
+      assert.equal(ctxJson.root.id, "5031:4449");
+
+      // 6. Bidirectional: Export SVG asset
+      const assetRes = await client.callTool({
+        name: "export_node_assets",
+        arguments: { nodeId: "5031:4449", format: "SVG" },
+      });
+      const assetSvg = (assetRes.content as Array<{ text: string }>)[0]!.text;
+      assert.ok(assetSvg.includes("<svg>"));
     } finally {
       await client.close();
       await mcpServer.close();
@@ -175,6 +217,13 @@ describe("E2E Closed-Loop Pipeline 1", () => {
     assert.equal(existsSync(join(pluginDist, manifest.main)), true);
     assert.equal(existsSync(join(pluginDist, manifest.ui)), true);
     assert.equal(existsSync(join(pluginDist, "ui.template.html")), true);
+
+    const codeJsContent = readFileSync(join(pluginDist, manifest.main), "utf8");
+    assert.equal(codeJsContent.includes("ZodError"), false, "plugin bundle should not bundle zod");
+    assert.ok(
+      Buffer.byteLength(codeJsContent, "utf8") < 50_000,
+      `plugin bundle code.js should be < 50 KB (was ${Buffer.byteLength(codeJsContent, "utf8")} bytes)`,
+    );
 
     const serverDist = join(ROOT_DIR, "packages", "server", "dist", "index.js");
     assert.equal(existsSync(serverDist), true);
@@ -240,7 +289,10 @@ describe("E2E Closed-Loop Pipeline 1", () => {
       try {
         await plugin.connect();
         const listed = await client.listTools();
-        assert.equal(listed.tools.length, 4);
+        assert.ok(listed.tools.some((t) => t.name === "figma_status"));
+        assert.ok(listed.tools.some((t) => t.name === "run_figma_js"));
+        assert.ok(listed.tools.some((t) => t.name === "get_design_context"));
+        assert.ok(listed.tools.some((t) => t.name === "export_node_assets"));
 
         const execRes = await client.callTool({
           name: "run_figma_js",

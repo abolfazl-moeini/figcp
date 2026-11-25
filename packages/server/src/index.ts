@@ -2,7 +2,9 @@
 import { join } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { getOrCreateToken, resolveFigcpHome } from "./auth.ts";
+import { runDoctor } from "./cli/doctor.ts";
 import { runSetup } from "./cli/setup.ts";
+import { enableUiLevelAddon } from "./cli/ui-level-addon.ts";
 import { createFigcpMcpServer } from "./mcp.ts";
 import { TransportNode } from "./transport/node.ts";
 
@@ -15,10 +17,12 @@ async function main(): Promise<void> {
         "figcp — Local Figma Design-System MCP Bridge",
         "",
         "Usage:",
-        "  figcp               Start MCP stdio server + local WebSocket bridge",
-        "  figcp --setup       Install plugin files to ~/.figcp/plugin/ and register MCP clients",
-        "  figcp --dry-run     Preview --setup changes without writing files",
-        "  figcp --print-path  Print the Figma plugin manifest.json path",
+        "  figcp                Start MCP stdio server + local WebSocket bridge",
+        "  figcp --setup        Install plugin files to ~/.figcp/plugin/ and register MCP clients",
+        "  figcp --doctor       Diagnose local Node, plugin, token, port, and client health",
+        "  figcp --install-skill Install figcp SKILL.md to AI coding agents (~/.gemini or ~/.agents)",
+        "  figcp --dry-run      Preview --setup changes without writing files",
+        "  figcp --print-path   Print the Figma plugin manifest.json path",
       ].join("\n") + "\n",
     );
     return;
@@ -29,9 +33,34 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (args.includes("--setup") || args.includes("--dry-run")) {
+  if (args.includes("--enable-ui-level") || args.includes("--with-ui-level")) {
+    const res = enableUiLevelAddon();
+    process.stderr.write(`${res.message}\n`);
+    return;
+  }
+
+  if (args.includes("--doctor")) {
+    const report = await runDoctor();
+    process.stderr.write(
+      JSON.stringify(
+        {
+          status: report.overallOk ? "healthy" : "issues_detected",
+          checks: report.checks,
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    if (!report.overallOk) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (args.includes("--setup") || args.includes("--dry-run") || args.includes("--install-skill")) {
     const dryRun = args.includes("--dry-run");
-    const result = runSetup({ dryRun });
+    const installSkill = args.includes("--install-skill") || args.includes("--setup");
+    const result = runSetup({ dryRun, installSkill });
     process.stderr.write(
       JSON.stringify(
         {
@@ -39,6 +68,7 @@ async function main(): Promise<void> {
           manifestPath: result.manifestPath,
           updatedClients: result.updatedClients,
           skippedClients: result.skippedClients,
+          installedSkills: result.installedSkills,
           nextStep: `In Figma Desktop: Plugins -> Development -> Import plugin from manifest... -> ${result.manifestPath}`,
         },
         null,

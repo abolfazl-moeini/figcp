@@ -6,6 +6,9 @@ export const RpcMethodSchema = z.enum([
   "inspect_design_system",
   "inspect_node_bounds",
   "figma_undo",
+  "figma_status",
+  "get_design_context",
+  "export_node_assets",
 ]);
 
 export type RpcMethod = z.infer<typeof RpcMethodSchema>;
@@ -117,6 +120,7 @@ export interface NodeBoundsSummary {
   strokeStyleId?: string | null;
   boundVariables?: Record<string, unknown>;
   characters?: string;
+  fontName?: { family: string; style: string };
   textAlignHorizontal?: "LEFT" | "CENTER" | "RIGHT" | "JUSTIFIED";
   truncatedChildrenCount?: number;
   children?: NodeBoundsSummary[];
@@ -149,6 +153,7 @@ export const NodeBoundsSummarySchema: z.ZodType<NodeBoundsSummary> = z.lazy(() =
     strokeStyleId: z.string().nullable().optional(),
     boundVariables: z.record(z.unknown()).optional(),
     characters: z.string().optional(),
+    fontName: z.object({ family: z.string(), style: z.string() }).optional(),
     textAlignHorizontal: z.enum(["LEFT", "CENTER", "RIGHT", "JUSTIFIED"]).optional(),
     truncatedChildrenCount: z.number().int().nonnegative().optional(),
     children: z.array(NodeBoundsSummarySchema).optional(),
@@ -195,16 +200,34 @@ export const DesignSystemSnapshotSchema = z.object({
     }),
   ),
   styles: z.object({
-    paint: z.array(z.object({ id: z.string(), name: z.string() })),
+    paint: z.array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        hex: z.string().optional(),
+        opacity: z.number().optional(),
+      }),
+    ),
     text: z.array(
       z.object({
         id: z.string(),
         name: z.string(),
         fontName: z.object({ family: z.string(), style: z.string() }).optional(),
         fontSize: z.number().optional(),
+        lineHeight: z.unknown().optional(),
+        letterSpacing: z.unknown().optional(),
       }),
     ),
-    effect: z.array(z.object({ id: z.string(), name: z.string() })),
+    effect: z.array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        type: z.string().optional(),
+        radius: z.number().optional(),
+        colorHex: z.string().optional(),
+        offset: z.object({ x: z.number(), y: z.number() }).optional(),
+      }),
+    ),
   }),
   componentSets: z.array(
     z.object({
@@ -215,6 +238,15 @@ export const DesignSystemSnapshotSchema = z.object({
       properties: z.record(z.unknown()),
     }),
   ),
+  components: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        pageName: z.string(),
+      }),
+    )
+    .optional(),
   fonts: z.array(z.object({ family: z.string(), style: z.string() })).optional(),
   truncated: z.boolean().optional(),
   totalPages: z.number().int().nonnegative().optional(),
@@ -250,13 +282,4 @@ export const FollowerRpcResponseSchema = z.object({
   error: z.string().optional(),
 });
 
-/**
- * Normalizes Figma URL node IDs ("5031-4449") into Plugin API format ("5031:4449").
- */
-export function normalizeNodeId(id: string): string {
-  const trimmed = id.trim();
-  if (/^\d+-\d+$/.test(trimmed)) {
-    return trimmed.replace("-", ":");
-  }
-  return trimmed;
-}
+export { normalizeNodeId } from "./utils.ts";

@@ -1,6 +1,6 @@
 {
   "name": "figcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -12,6 +12,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p packages/shared/tsconfig.json && tsc --noEmit -p packages/linter/tsconfig.json && tsc --noEmit -p packages/plugin/tsconfig.json && tsc --noEmit -p packages/server/tsconfig.json",
     "test": "node scripts/run-tests.mjs",
+    "setup": "node packages/server/dist/index.js --setup",
+    "doctor": "node packages/server/dist/index.js --doctor",
     "build": "npm run build:plugin && npm run build:server",
     "build:plugin": "node packages/plugin/scripts/build.mjs",
     "build:server": "node packages/server/scripts/build.mjs"

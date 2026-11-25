@@ -48,8 +48,12 @@ export interface MinimalFigmaForHelpers {
     getLocalVariablesAsync(): Promise<Array<{ id: string; name: string; variableCollectionId: string }>>;
     setBoundVariableForPaint(paint: SolidPaint, field: "color", variable: Variable | null): SolidPaint;
   };
+  getLocalPaintStylesAsync?(): Promise<Array<{ id: string; name: string }>>;
+  getLocalTextStylesAsync?(): Promise<Array<{ id: string; name: string }>>;
+  getLocalEffectStylesAsync?(): Promise<Array<{ id: string; name: string }>>;
   currentPage: {
     selection: readonly SceneNode[];
+    findOne?(predicate: (node: SceneNode) => boolean): SceneNode | null;
   };
   viewport: {
     scrollAndZoomIntoView(nodes: readonly BaseNode[]): void;
@@ -60,6 +64,28 @@ export function createPluginHelpers(figmaApi: MinimalFigmaForHelpers) {
   return {
     hexToRgb,
     hexToRgba,
+
+    async requireFont(fontName: FontName): Promise<void> {
+      const available = await figmaApi.listAvailableFontsAsync();
+      const familyMatches = available.filter(
+        (f) => f.fontName.family.toLowerCase() === fontName.family.toLowerCase(),
+      );
+      if (familyMatches.length === 0) {
+        throw new Error(
+          `Font family "${fontName.family}" is not installed in Figma Desktop. Install the local OS font or choose an installed font.`,
+        );
+      }
+      const exactMatch = familyMatches.find(
+        (f) => f.fontName.style.toLowerCase() === fontName.style.toLowerCase(),
+      );
+      if (!exactMatch) {
+        const availableStyles = familyMatches.map((f) => `"${f.fontName.style}"`).join(", ");
+        throw new Error(
+          `Font style "${fontName.style}" not found for family "${fontName.family}". Available installed styles: ${availableStyles}.`,
+        );
+      }
+      await figmaApi.loadFontAsync(exactMatch.fontName);
+    },
 
     async loadFontSafe(fontName: FontName): Promise<{ ok: true } | { ok: false; message: string; suggestions: FontName[] }> {
       try {
@@ -94,8 +120,9 @@ export function createPluginHelpers(figmaApi: MinimalFigmaForHelpers) {
     resizeFrameSafe(
       frame: {
         resize: (width: number, height: number) => void;
-        primaryAxisSizingMode: "FIXED" | "AUTO";
-        counterAxisSizingMode: "FIXED" | "AUTO";
+        layoutMode?: "NONE" | "HORIZONTAL" | "VERTICAL";
+        primaryAxisSizingMode?: "FIXED" | "AUTO";
+        counterAxisSizingMode?: "FIXED" | "AUTO";
       },
       width: number,
       height: number,
@@ -103,8 +130,91 @@ export function createPluginHelpers(figmaApi: MinimalFigmaForHelpers) {
     ): void {
       // Always resize BEFORE applying sizing modes because Figma's resize() resets both to FIXED.
       frame.resize(width, height);
-      if (sizing.primary) frame.primaryAxisSizingMode = sizing.primary;
-      if (sizing.counter) frame.counterAxisSizingMode = sizing.counter;
+      // Guard against layoutMode NONE where setting sizing modes throws in Figma
+      if (frame.layoutMode !== "NONE") {
+        if (sizing.primary && "primaryAxisSizingMode" in frame) frame.primaryAxisSizingMode = sizing.primary;
+        if (sizing.counter && "counterAxisSizingMode" in frame) frame.counterAxisSizingMode = sizing.counter;
+      }
+    },
+
+    setAutoLayout(
+      frame: {
+        layoutMode?: "NONE" | "HORIZONTAL" | "VERTICAL";
+        itemSpacing?: number;
+        paddingTop?: number;
+        paddingRight?: number;
+        paddingBottom?: number;
+        paddingLeft?: number;
+        primaryAxisSizingMode?: "FIXED" | "AUTO";
+        counterAxisSizingMode?: "FIXED" | "AUTO";
+        primaryAxisAlignItems?: "MIN" | "CENTER" | "MAX" | "SPACE_BETWEEN";
+        counterAxisAlignItems?: "MIN" | "CENTER" | "MAX" | "BASELINE";
+      },
+      options: {
+        direction?: "HORIZONTAL" | "VERTICAL";
+        spacing?: number;
+        padding?: number | { top?: number; right?: number; bottom?: number; left?: number };
+        primarySizing?: "FIXED" | "AUTO";
+        counterSizing?: "FIXED" | "AUTO";
+        primaryAlign?: "MIN" | "CENTER" | "MAX" | "SPACE_BETWEEN";
+        counterAlign?: "MIN" | "CENTER" | "MAX" | "BASELINE";
+      } = {},
+    ): void {
+      frame.layoutMode = options.direction ?? "HORIZONTAL";
+      if (options.spacing !== undefined) frame.itemSpacing = options.spacing;
+      if (typeof options.padding === "number") {
+        frame.paddingTop = options.padding;
+        frame.paddingRight = options.padding;
+        frame.paddingBottom = options.padding;
+        frame.paddingLeft = options.padding;
+      } else if (options.padding && typeof options.padding === "object") {
+        if (options.padding.top !== undefined) frame.paddingTop = options.padding.top;
+        if (options.padding.right !== undefined) frame.paddingRight = options.padding.right;
+        if (options.padding.bottom !== undefined) frame.paddingBottom = options.padding.bottom;
+        if (options.padding.left !== undefined) frame.paddingLeft = options.padding.left;
+      }
+      if (options.primarySizing) frame.primaryAxisSizingMode = options.primarySizing;
+      if (options.counterSizing) frame.counterAxisSizingMode = options.counterSizing;
+      if (options.primaryAlign) frame.primaryAxisAlignItems = options.primaryAlign;
+      if (options.counterAlign) frame.counterAxisAlignItems = options.counterAlign;
+    },
+
+    bindVariable(
+      node: { setBoundVariable?: (field: string, variableId: string) => void },
+      field: string,
+      variable: { id: string } | string,
+    ): void {
+      const varId = typeof variable === "string" ? variable : variable.id;
+      if (typeof node.setBoundVariable === "function") {
+        node.setBoundVariable(field, varId);
+      }
+    },
+
+    async findStyle(name: string, type: "paint" | "text" | "effect" = "paint") {
+      if (type === "paint" && typeof figmaApi.getLocalPaintStylesAsync === "function") {
+        const styles = await figmaApi.getLocalPaintStylesAsync();
+        return styles.find((s) => s.name === name || s.name.endsWith(`/${name}`)) ?? null;
+      }
+      if (type === "text" && typeof figmaApi.getLocalTextStylesAsync === "function") {
+        const styles = await figmaApi.getLocalTextStylesAsync();
+        return styles.find((s) => s.name === name || s.name.endsWith(`/${name}`)) ?? null;
+      }
+      if (type === "effect" && typeof figmaApi.getLocalEffectStylesAsync === "function") {
+        const styles = await figmaApi.getLocalEffectStylesAsync();
+        return styles.find((s) => s.name === name || s.name.endsWith(`/${name}`)) ?? null;
+      }
+      return null;
+    },
+
+    async findComponent(name: string) {
+      if (typeof figmaApi.currentPage.findOne === "function") {
+        return (
+          figmaApi.currentPage.findOne(
+            (n) => (n.type === "COMPONENT" || n.type === "COMPONENT_SET") && (n.name === name || n.name.endsWith(`/${name}`)),
+          ) ?? null
+        );
+      }
+      return null;
     },
 
     makeBoundPaint(colorVar: Variable | null | undefined, fallbackHex = "#808080"): SolidPaint[] {

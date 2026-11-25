@@ -124,6 +124,19 @@ export function lintNodeTree(root: NodeBoundsSummary): LintIssue[] {
           message: "Text mixes Persian and Latin characters; verify visual bidi order via screenshot.",
         });
       }
+      if (hasPersian && node.fontName && typeof node.fontName === "object" && "family" in node.fontName) {
+        const LATIN_ONLY_FONTS = ["inter", "roboto", "sf pro", "helvetica", "arial"];
+        const fam = String((node.fontName as { family: string }).family).toLowerCase();
+        if (LATIN_ONLY_FONTS.some((f) => fam.includes(f))) {
+          issues.push({
+            rule: "rtl-font-mismatch",
+            severity: "warning",
+            nodeId: node.id,
+            nodeName: node.name,
+            message: `Persian/Arabic text uses Latin-only font "${(node.fontName as { family: string }).family}". Use a Persian font (e.g. "IRANSansXFaNum", "Vazirmatn") for correct shaping.`,
+          });
+        }
+      }
     }
 
     const visibleChildren = (node.children ?? []).filter(
@@ -134,12 +147,15 @@ export function lintNodeTree(root: NodeBoundsSummary): LintIssue[] {
     if (node.absoluteBoundingBox && !node.clipsContent) {
       for (const child of visibleChildren) {
         if (child.absoluteBoundingBox && childOverflowsParent(child.absoluteBoundingBox, node.absoluteBoundingBox)) {
+          const isAbsolute = child.layoutPositioning === "ABSOLUTE";
           issues.push({
             rule: "child-overflow",
-            severity: "error",
+            severity: isAbsolute ? "info" : "error",
             nodeId: child.id,
             nodeName: child.name,
-            message: `Child "${child.name}" overflows parent "${node.name}" bounding box.`,
+            message: isAbsolute
+              ? `Absolute child "${child.name}" extends beyond parent "${node.name}" bounding box.`
+              : `Child "${child.name}" overflows parent "${node.name}" bounding box.`,
           });
         }
       }
@@ -150,10 +166,12 @@ export function lintNodeTree(root: NodeBoundsSummary): LintIssue[] {
       const flowChildren = visibleChildren.filter(
         (c) => c.layoutPositioning !== "ABSOLUTE" && c.absoluteBoundingBox,
       );
-      for (let i = 0; i < flowChildren.length; i++) {
-        for (let j = i + 1; j < flowChildren.length; j++) {
-          const a = flowChildren[i]!;
-          const b = flowChildren[j]!;
+      const MAX_SIBLING_CHECK = 50;
+      const checkedChildren = flowChildren.slice(0, MAX_SIBLING_CHECK);
+      for (let i = 0; i < checkedChildren.length; i++) {
+        for (let j = i + 1; j < checkedChildren.length; j++) {
+          const a = checkedChildren[i]!;
+          const b = checkedChildren[j]!;
           if (boxesOverlap(a.absoluteBoundingBox!, b.absoluteBoundingBox!)) {
             issues.push({
               rule: "sibling-overlap",

@@ -1,11 +1,12 @@
 {
   "name": "@figcp/shared",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./utils": "./src/utils.ts"
   },
   "dependencies": {
     "zod": "^3.24.2"

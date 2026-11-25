@@ -84,7 +84,7 @@
       let activeWs = null;
       let connectionGen = 0;
       let helloPayload = null;
-      let retryDelay = 1000;
+      let retryDelay = 300;
       let retryTimer = null;
       const workerWatchdogs = new Map();
 
@@ -106,9 +106,9 @@
         setUi("", "Reconnecting...", "Retry in " + Math.round(retryDelay / 1000) + "s");
         retryTimer = setTimeout(() => {
           retryTimer = null;
+          retryDelay = retryDelay < 800 ? 800 : retryDelay < 2000 ? 2000 : 5000;
           connect();
         }, retryDelay);
-        retryDelay = Math.min(retryDelay * 2, 5000);
       }
 
       function connect() {

@@ -51,8 +51,11 @@ describe("plugin inspectors", () => {
 
     const snapshot = await handleInspectDesignSystem(mockFigma, { fontQuery: "IRANSans" });
     assert.equal(snapshot.fileName, "Bidar DS");
-    assert.equal(snapshot.variableCollections[0]?.variables[1]?.valuesByMode.m1, "{blue/500}");
-    assert.equal(snapshot.variableCollections[0]?.variables[2]?.valuesByMode.m1, "{border/focus -> blue/500}");
+    assert.equal(snapshot.variableCollections[0]?.variables[1]?.valuesByMode.m1, '{blue/500} = "#0000ff"');
+    assert.equal(
+      snapshot.variableCollections[0]?.variables[2]?.valuesByMode.m1,
+      '{border/focus -> blue/500} = "#0000ff"',
+    );
     assert.equal(snapshot.componentSets[0]?.variantCount, 16);
     assert.equal(snapshot.fonts?.length, 1);
     assert.equal(snapshot.fonts?.[0]?.family, "IRANSansXFaNum");

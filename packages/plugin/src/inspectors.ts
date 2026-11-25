@@ -1,4 +1,5 @@
-import { type DesignSystemSnapshot, type NodeBoundsSummary, normalizeNodeId } from "@figcp/shared";
+import { type DesignSystemSnapshot, type NodeBoundsSummary } from "@figcp/shared";
+import { normalizeNodeId } from "@figcp/shared/utils";
 
 export interface InspectDesignSystemParams {
   fontQuery?: string;
@@ -37,6 +38,36 @@ function uint8ToBase64(bytes: Uint8Array): string {
   return out;
 }
 
+function uint8ArrayToUtf8(bytes: Uint8Array): string {
+  if (typeof TextDecoder !== "undefined") {
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) {
+    s += String.fromCharCode(bytes[i]!);
+  }
+  try {
+    return decodeURIComponent(escape(s));
+  } catch {
+    return s;
+  }
+}
+
+function formatColorValue(val: unknown): unknown {
+  if (val && typeof val === "object" && "r" in val && "g" in val && "b" in val) {
+    const c = val as { r: number; g: number; b: number; a?: number };
+    const r = Math.round(c.r * 255).toString(16).padStart(2, "0");
+    const g = Math.round(c.g * 255).toString(16).padStart(2, "0");
+    const b = Math.round(c.b * 255).toString(16).padStart(2, "0");
+    if (c.a !== undefined && c.a < 1) {
+      const a = Math.round(c.a * 255).toString(16).padStart(2, "0");
+      return `#${r}${g}${b}${a}`;
+    }
+    return `#${r}${g}${b}`;
+  }
+  return val;
+}
+
 export async function handleInspectDesignSystem(
   figmaApi: PluginAPI,
   params: InspectDesignSystemParams = {},
@@ -55,6 +86,7 @@ export async function handleInspectDesignSystem(
     const names: string[] = [];
     const visited = new Set<string>();
     let currentId: string | undefined = aliasId;
+    let terminalVal: unknown;
 
     for (let hop = 0; hop < 10 && currentId; hop++) {
       if (visited.has(currentId)) {
@@ -78,10 +110,13 @@ export async function handleInspectDesignSystem(
       ) {
         currentId = (nextVal as VariableAlias).id;
       } else {
+        terminalVal = nextVal;
         break;
       }
     }
-    return `{${names.join(" -> ")}}`;
+    const resolvedSuffix =
+      terminalVal !== undefined ? ` = ${JSON.stringify(formatColorValue(terminalVal))}` : "";
+    return `{${names.join(" -> ")}}${resolvedSuffix}`;
   };
 
   const variableCollections = collections.map((col) => {
@@ -96,7 +131,7 @@ export async function handleInspectDesignSystem(
           if (val && typeof val === "object" && "type" in val && val.type === "VARIABLE_ALIAS") {
             valuesByMode[modeId] = resolveAliasChain((val as VariableAlias).id, modeId);
           } else {
-            valuesByMode[modeId] = val;
+            valuesByMode[modeId] = formatColorValue(val);
           }
         }
         return {
@@ -119,6 +154,7 @@ export async function handleInspectDesignSystem(
   const truncated = matchingPages.length > pagesToInspect.length;
 
   const componentSets: DesignSystemSnapshot["componentSets"] = [];
+  const components: NonNullable<DesignSystemSnapshot["components"]> = [];
   for (const page of pagesToInspect) {
     if (typeof page.loadAsync === "function") {
       await page.loadAsync();
@@ -131,6 +167,16 @@ export async function handleInspectDesignSystem(
         pageName: page.name,
         variantCount: set.children.length,
         properties: set.componentPropertyDefinitions ?? {},
+      });
+    }
+    const standalones = page.findAll(
+      (n) => n.type === "COMPONENT" && (!n.parent || n.parent.type !== "COMPONENT_SET"),
+    ) as ComponentNode[];
+    for (const comp of standalones) {
+      components.push({
+        id: comp.id,
+        name: comp.name,
+        pageName: page.name,
       });
     }
   }
@@ -150,16 +196,45 @@ export async function handleInspectDesignSystem(
     currentPage: figmaApi.currentPage.name,
     variableCollections,
     styles: {
-      paint: paintStyles.map((s) => ({ id: s.id, name: s.name })),
+      paint: paintStyles.map((s) => {
+        const solid = (s as unknown as { paints?: readonly Paint[] }).paints?.find((p) => p.type === "SOLID") as SolidPaint | undefined;
+        let hex: string | undefined;
+        if (solid && solid.color) {
+          const r = Math.round(solid.color.r * 255).toString(16).padStart(2, "0");
+          const g = Math.round(solid.color.g * 255).toString(16).padStart(2, "0");
+          const b = Math.round(solid.color.b * 255).toString(16).padStart(2, "0");
+          hex = `#${r}${g}${b}`;
+        }
+        return { id: s.id, name: s.name, hex, opacity: solid?.opacity };
+      }),
       text: textStyles.map((s) => ({
         id: s.id,
         name: s.name,
         fontName: s.fontName,
         fontSize: s.fontSize,
       })),
-      effect: effectStyles.map((s) => ({ id: s.id, name: s.name })),
+      effect: effectStyles.map((s) => {
+        const eff = (s as unknown as { effects?: readonly Effect[] }).effects?.[0];
+        let colorHex: string | undefined;
+        if (eff && "color" in eff && (eff as { color?: RGBA }).color) {
+          const c = (eff as { color: RGBA }).color;
+          const r = Math.round(c.r * 255).toString(16).padStart(2, "0");
+          const g = Math.round(c.g * 255).toString(16).padStart(2, "0");
+          const b = Math.round(c.b * 255).toString(16).padStart(2, "0");
+          colorHex = `#${r}${g}${b}`;
+        }
+        return {
+          id: s.id,
+          name: s.name,
+          type: eff?.type,
+          radius: eff && "radius" in eff ? eff.radius : undefined,
+          colorHex,
+          offset: eff && "offset" in eff ? eff.offset : undefined,
+        };
+      }),
     },
     componentSets,
+    components,
     totalPages: allPages.length,
     pagesLoaded: pagesToInspect.length,
     ...(truncated ? { truncated } : {}),
@@ -264,6 +339,12 @@ function summarizeNode(node: SceneNode, depth: number, maxDepth: number): NodeBo
   if (node.type === "TEXT") {
     summary.characters = node.characters;
     summary.textAlignHorizontal = node.textAlignHorizontal;
+    if (typeof (node as TextNode).fontName === "object" && (node as TextNode).fontName !== null) {
+      summary.fontName = {
+        family: ((node as TextNode).fontName as FontName).family,
+        style: ((node as TextNode).fontName as FontName).style,
+      };
+    }
   }
 
   if ("children" in node && Array.isArray(node.children)) {
@@ -340,4 +421,228 @@ export async function handleFigmaUndo(
   }
   figmaApi.triggerUndo();
   return { ok: true, action: "undo" };
+}
+
+export interface DesignContextExtractedNode {
+  id: string;
+  name: string;
+  type: string;
+  rect: { x: number; y: number; width: number; height: number };
+  layoutMode?: "NONE" | "HORIZONTAL" | "VERTICAL";
+  itemSpacing?: number;
+  padding?: { top: number; right: number; bottom: number; left: number };
+  alignItems?: string;
+  justifyContent?: string;
+  primarySizing?: string;
+  counterSizing?: string;
+  fills?: Array<{ hex?: string; opacity?: number; boundVariable?: string }>;
+  strokes?: Array<{ hex?: string; opacity?: number; boundVariable?: string; width?: number }>;
+  cornerRadius?: number;
+  effects?: Array<{ type: string; colorHex?: string; radius?: number; offset?: { x: number; y: number } }>;
+  typography?: {
+    characters?: string;
+    fontFamily?: string;
+    fontWeight?: string;
+    fontSize?: number;
+    lineHeight?: string | number;
+    textAlign?: string;
+  };
+  component?: {
+    id: string;
+    name: string;
+    properties?: Record<string, unknown>;
+  };
+  children?: DesignContextExtractedNode[];
+}
+
+export function extractDesignContextNode(node: SceneNode, depth = 0, maxDepth = 6): DesignContextExtractedNode {
+  const box =
+    "absoluteBoundingBox" in node && node.absoluteBoundingBox
+      ? {
+          x: Math.round(node.absoluteBoundingBox.x),
+          y: Math.round(node.absoluteBoundingBox.y),
+          width: Math.round(node.absoluteBoundingBox.width),
+          height: Math.round(node.absoluteBoundingBox.height),
+        }
+      : { x: 0, y: 0, width: 0, height: 0 };
+
+  const rec = node as unknown as Record<string, unknown>;
+  const res: DesignContextExtractedNode = {
+    id: node.id,
+    name: node.name,
+    type: node.type,
+    rect: box,
+  };
+
+  if ("layoutMode" in node && typeof rec.layoutMode === "string" && rec.layoutMode !== "NONE") {
+    res.layoutMode = rec.layoutMode as DesignContextExtractedNode["layoutMode"];
+    if (typeof rec.itemSpacing === "number") res.itemSpacing = rec.itemSpacing;
+    res.padding = {
+      top: typeof rec.paddingTop === "number" ? rec.paddingTop : 0,
+      right: typeof rec.paddingRight === "number" ? rec.paddingRight : 0,
+      bottom: typeof rec.paddingBottom === "number" ? rec.paddingBottom : 0,
+      left: typeof rec.paddingLeft === "number" ? rec.paddingLeft : 0,
+    };
+    if (typeof rec.primaryAxisAlignItems === "string") res.justifyContent = rec.primaryAxisAlignItems;
+    if (typeof rec.counterAxisAlignItems === "string") res.alignItems = rec.counterAxisAlignItems;
+    if (typeof rec.primaryAxisSizingMode === "string") res.primarySizing = rec.primaryAxisSizingMode;
+    if (typeof rec.counterAxisSizingMode === "string") res.counterSizing = rec.counterAxisSizingMode;
+  }
+
+  if (typeof rec.cornerRadius === "number" && rec.cornerRadius > 0) {
+    res.cornerRadius = rec.cornerRadius;
+  }
+
+  if ("fills" in node && Array.isArray(rec.fills)) {
+    const fills: NonNullable<DesignContextExtractedNode["fills"]> = [];
+    for (const p of rec.fills) {
+      if (p.type === "SOLID" && p.color) {
+        const r = Math.round(p.color.r * 255).toString(16).padStart(2, "0");
+        const g = Math.round(p.color.g * 255).toString(16).padStart(2, "0");
+        const b = Math.round(p.color.b * 255).toString(16).padStart(2, "0");
+        fills.push({ hex: `#${r}${g}${b}`, opacity: p.opacity });
+      }
+    }
+    if (fills.length > 0) res.fills = fills;
+  }
+
+  if ("strokes" in node && Array.isArray(rec.strokes)) {
+    const strokes: NonNullable<DesignContextExtractedNode["strokes"]> = [];
+    for (const p of rec.strokes) {
+      if (p.type === "SOLID" && p.color) {
+        const r = Math.round(p.color.r * 255).toString(16).padStart(2, "0");
+        const g = Math.round(p.color.g * 255).toString(16).padStart(2, "0");
+        const b = Math.round(p.color.b * 255).toString(16).padStart(2, "0");
+        strokes.push({
+          hex: `#${r}${g}${b}`,
+          opacity: p.opacity,
+          width: typeof rec.strokeWeight === "number" ? rec.strokeWeight : undefined,
+        });
+      }
+    }
+    if (strokes.length > 0) res.strokes = strokes;
+  }
+
+  if (node.type === "TEXT") {
+    const tNode = node as TextNode;
+    res.typography = {
+      characters: tNode.characters,
+      fontSize: typeof tNode.fontSize === "number" ? tNode.fontSize : undefined,
+      fontFamily:
+        typeof tNode.fontName === "object" && tNode.fontName !== null
+          ? (tNode.fontName as FontName).family
+          : undefined,
+      fontWeight:
+        typeof tNode.fontName === "object" && tNode.fontName !== null
+          ? (tNode.fontName as FontName).style
+          : undefined,
+      textAlign: typeof tNode.textAlignHorizontal === "string" ? tNode.textAlignHorizontal : undefined,
+    };
+  }
+
+  if (node.type === "INSTANCE") {
+    const inst = node as InstanceNode;
+    res.component = {
+      id: inst.mainComponent?.id ?? inst.id,
+      name: inst.mainComponent?.name ?? inst.name,
+      properties: inst.componentProperties ?? {},
+    };
+  } else if (node.type === "COMPONENT") {
+    res.component = {
+      id: node.id,
+      name: node.name,
+    };
+  }
+
+  if ("children" in node && Array.isArray(node.children) && depth < maxDepth) {
+    res.children = (node.children as SceneNode[])
+      .filter((c) => c.visible !== false)
+      .map((c) => extractDesignContextNode(c, depth + 1, maxDepth));
+  }
+
+  return res;
+}
+
+export async function handleGetDesignContext(
+  figmaApi: PluginAPI,
+  params: {
+    nodeId?: string;
+    maxDepth?: number;
+    includeScreenshot?: boolean;
+    screenshotScale?: number;
+  } = {},
+): Promise<{ root: DesignContextExtractedNode; screenshotBase64?: string }> {
+  let target: SceneNode | null = null;
+  if (params.nodeId) {
+    const normalized = normalizeNodeId(params.nodeId);
+    const found = await figmaApi.getNodeByIdAsync(normalized);
+    if (!found || found.type === "DOCUMENT" || found.type === "PAGE") {
+      throw new Error(`Node "${normalized}" was not found or is not a SceneNode.`);
+    }
+    target = found as SceneNode;
+  } else {
+    target = figmaApi.currentPage.selection[0] ?? null;
+    if (!target) {
+      throw new Error("No nodeId provided and nothing is currently selected in Figma.");
+    }
+  }
+
+  const root = extractDesignContextNode(target, 0, params.maxDepth ?? 6);
+
+  let screenshotBase64: string | undefined;
+  if (params.includeScreenshot) {
+    const scale = params.screenshotScale ?? 2;
+    const pngBytes = await target.exportAsync({
+      format: "PNG",
+      constraint: { type: "SCALE", value: scale },
+    });
+    screenshotBase64 = uint8ToBase64(pngBytes);
+  }
+
+  return { root, ...(screenshotBase64 ? { screenshotBase64 } : {}) };
+}
+
+export async function handleExportNodeAssets(
+  figmaApi: PluginAPI,
+  params: { nodeId?: string; format?: "SVG" | "PNG"; scale?: number } = {},
+): Promise<{ ok: true; format: "SVG" | "PNG"; content: string; nodeId: string; nodeName: string }> {
+  let target: SceneNode | null = null;
+  if (params.nodeId) {
+    const normalized = normalizeNodeId(params.nodeId);
+    const found = await figmaApi.getNodeByIdAsync(normalized);
+    if (!found || found.type === "DOCUMENT" || found.type === "PAGE") {
+      throw new Error(`Node "${normalized}" was not found or is not a SceneNode.`);
+    }
+    target = found as SceneNode;
+  } else {
+    target = figmaApi.currentPage.selection[0] ?? null;
+    if (!target) {
+      throw new Error("No nodeId provided and nothing is currently selected in Figma.");
+    }
+  }
+
+  const format = params.format === "PNG" ? "PNG" : "SVG";
+  if (format === "PNG") {
+    const pngBytes = await target.exportAsync({
+      format: "PNG",
+      constraint: { type: "SCALE", value: params.scale ?? 2 },
+    });
+    return {
+      ok: true,
+      format: "PNG",
+      content: uint8ToBase64(pngBytes),
+      nodeId: target.id,
+      nodeName: target.name,
+    };
+  } else {
+    const svgBytes = await target.exportAsync({ format: "SVG" });
+    const svgString = uint8ArrayToUtf8(svgBytes);
+    return {
+      ok: true,
+      format: "SVG",
+      content: svgString,
+      nodeId: target.id,
+      nodeName: target.name,
+    };
+  }
 }

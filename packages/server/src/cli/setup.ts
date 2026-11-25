@@ -11,6 +11,7 @@ export interface SetupOptions {
   dryRun?: boolean;
   pluginDistDir?: string;
   serverEntryPath?: string;
+  installSkill?: boolean;
 }
 
 export interface SetupResult {
@@ -19,6 +20,7 @@ export interface SetupResult {
   tokenPath: string;
   updatedClients: string[];
   skippedClients: string[];
+  installedSkills?: string[];
   dryRun: boolean;
 }
 
@@ -155,8 +157,15 @@ export function runSetup(options: SetupOptions = {}): SetupResult {
       // Ignore on platforms that do not support POSIX chmod
     }
 
-    const manifestRaw = readFileSync(manifestSrc, "utf8").replaceAll("1994", String(port));
-    writeFileSync(manifestPath, manifestRaw, "utf8");
+    const manifestObj = JSON.parse(readFileSync(manifestSrc, "utf8")) as {
+      networkAccess?: { devAllowedDomains?: string[] };
+    };
+    if (manifestObj.networkAccess && Array.isArray(manifestObj.networkAccess.devAllowedDomains)) {
+      manifestObj.networkAccess.devAllowedDomains = manifestObj.networkAccess.devAllowedDomains.map(
+        (domain) => domain.replace(/:\d+$/, `:${port}`),
+      );
+    }
+    writeFileSync(manifestPath, `${JSON.stringify(manifestObj, null, 2)}\n`, "utf8");
     copyFileSync(codeSrc, join(pluginDir, "code.js"));
 
     const uiHtml = readFileSync(uiSrc, "utf8")
@@ -190,6 +199,9 @@ export function runSetup(options: SetupOptions = {}): SetupResult {
     },
   };
 
+  const hasClaude =
+    existsSync(join(userHome, ".claude.json")) || existsSync(join(userHome, ".claude"));
+
   const targets: Array<{
     name: string;
     path: string;
@@ -198,7 +210,22 @@ export function runSetup(options: SetupOptions = {}): SetupResult {
     legacyV1CleanupKey?: string;
   }> = [
     { name: "Cursor", path: join(userHome, ".cursor", "mcp.json"), sectionPath: ["mcpServers"], value: stdioEntry },
-    { name: "Claude Code", path: join(userHome, ".claude.json"), sectionPath: ["mcpServers"], value: stdioEntry },
+    {
+      name: "Antigravity",
+      path: join(userHome, ".gemini", "antigravity", "mcp_config.json"),
+      sectionPath: ["mcpServers"],
+      value: stdioEntry,
+    },
+    ...(hasClaude
+      ? [
+          {
+            name: "Claude Code",
+            path: join(userHome, ".claude.json"),
+            sectionPath: ["mcpServers"],
+            value: stdioEntry,
+          },
+        ]
+      : []),
     {
       name: "OpenCode",
       path: join(userHome, ".config", "opencode", "opencode.json"),
@@ -227,12 +254,46 @@ export function runSetup(options: SetupOptions = {}): SetupResult {
     }
   }
 
+  const installedSkills: string[] = [];
+  if (options.installSkill && !dryRun) {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const skillCandidates = [
+      resolve(here, "../../../skills/figcp/SKILL.md"),
+      resolve(here, "../../skills/figcp/SKILL.md"),
+      resolve(here, "../packages/skills/figcp/SKILL.md"),
+    ];
+    let skillSrc: string | undefined;
+    for (const c of skillCandidates) {
+      if (existsSync(c)) {
+        skillSrc = c;
+        break;
+      }
+    }
+
+    if (skillSrc) {
+      const skillDestinations = [
+        join(userHome, ".gemini", "antigravity", "skills", "figcp"),
+        join(userHome, ".agents", "skills", "figcp"),
+      ];
+      for (const destDir of skillDestinations) {
+        const rootCandidate = dirname(dirname(destDir));
+        if (existsSync(rootCandidate)) {
+          mkdirSync(destDir, { recursive: true });
+          const targetFile = join(destDir, "SKILL.md");
+          copyFileSync(skillSrc, targetFile);
+          installedSkills.push(targetFile);
+        }
+      }
+    }
+  }
+
   return {
     pluginDir,
     manifestPath,
     tokenPath,
     updatedClients,
     skippedClients,
+    installedSkills,
     dryRun,
   };
 }
