@@ -13,6 +13,22 @@
 
 ## Quick Start
 
+### Option A: Install from npm (Recommended)
+
+```bash
+npm install -g figcp
+figcp --setup
+figcp --doctor
+```
+
+Or without global install:
+
+```bash
+npx -y figcp --setup
+```
+
+### Option B: From Source
+
 ```bash
 npm install
 npm run build

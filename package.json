@@ -1,8 +1,42 @@
 {
   "name": "figcp",
   "version": "0.2.0",
-  "private": true,
+  "description": "Local-first, zero-quota, bidirectional Figma Desktop Plugin + MCP stdio bridge (Free/Starter plan compatible, local fonts & RTL support)",
+  "license": "MIT",
+  "author": "Abolfazl Moeini",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/abolfazl-moeini/figcp.git"
+  },
+  "homepage": "https://github.com/abolfazl-moeini/figcp#readme",
+  "bugs": {
+    "url": "https://github.com/abolfazl-moeini/figcp/issues"
+  },
+  "keywords": [
+    "figma",
+    "mcp",
+    "model-context-protocol",
+    "design-system",
+    "figma-plugin",
+    "rtl",
+    "code-connect",
+    "dtcg",
+    "ai-agents"
+  ],
   "type": "module",
+  "bin": {
+    "figcp": "./packages/server/dist/index.js"
+  },
+  "files": [
+    "packages/server/dist/index.js",
+    "packages/plugin/dist/manifest.json",
+    "packages/plugin/dist/code.js",
+    "packages/plugin/dist/ui.template.html",
+    "packages/plugin/dist/ui.html",
+    "packages/skills/figcp/SKILL.md",
+    "README.md",
+    "LICENSE"
+  ],
   "workspaces": [
     "packages/*"
   ],
@@ -16,7 +50,13 @@
     "doctor": "node packages/server/dist/index.js --doctor",
     "build": "npm run build:plugin && npm run build:server",
     "build:plugin": "node packages/plugin/scripts/build.mjs",
-    "build:server": "node packages/server/scripts/build.mjs"
+    "build:server": "node packages/server/scripts/build.mjs",
+    "prepublishOnly": "npm run typecheck && npm run build && npm test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "ws": "^8.18.1",
+    "zod": "^3.24.2"
   },
   "devDependencies": {
     "@figma/plugin-typings": "^1.109.0",

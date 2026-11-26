@@ -16,7 +16,7 @@ await build({
   platform: "node",
   target: "node22",
   format: "esm",
-  packages: "external",
+  external: ["@modelcontextprotocol/sdk", "@modelcontextprotocol/sdk/*", "ws", "zod"],
   sourcemap: false,
 });
 
