@@ -138,7 +138,7 @@ async function safeSendCommand(
 export function createFigcpMcpServer(transport: TransportNode): McpServer {
   const server = new McpServer({
     name: "figcp",
-    version: "0.2.0",
+    version: "0.2.1",
   });
 
   server.tool(

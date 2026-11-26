@@ -12,7 +12,7 @@ import {
   type UndoParams,
 } from "./inspectors.ts";
 
-const PLUGIN_VERSION = "0.2.0";
+const PLUGIN_VERSION = "0.2.1";
 const executor = new SerialPluginExecutor();
 const helpersFactory = (guardedFigma: unknown) => createPluginHelpers(guardedFigma as PluginAPI);
 const SESSION_FILE_KEY = `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
