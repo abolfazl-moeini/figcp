@@ -1,6 +1,7 @@
 {
   "name": "figcp",
   "version": "0.2.1",
+  "mcpName": "io.github.abolfazl-moeini/figcp",
   "description": "Local-first, zero-quota, bidirectional Figma Desktop Plugin + MCP stdio bridge (Free/Starter plan compatible, local fonts & RTL support)",
   "license": "MIT",
   "author": "Abolfazl Moeini",

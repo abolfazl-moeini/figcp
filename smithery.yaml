@@ -1,0 +1,19 @@
+# Smithery configuration file: https://smithery.ai/docs/build/project-config
+startCommand:
+  type: stdio
+configSchema:
+  type: object
+  properties:
+    port:
+      type: number
+      title: "Bridge Port"
+      description: "Local loopback bridge port for Figma Desktop plugin"
+      default: 1994
+commandFunction: |-
+  (config) => ({
+    command: 'npx',
+    args: ['-y', 'figcp'],
+    env: {
+      FIGCP_PORT: String(config.port || 1994)
+    }
+  })
