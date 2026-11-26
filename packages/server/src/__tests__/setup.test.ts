@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { runDoctor } from "../cli/doctor.ts";
-import { runSetup } from "../cli/setup.ts";
+import { mergeTomlServerEntry, runSetup } from "../cli/setup.ts";
 
 describe("CLI --setup installer", () => {
   it("writes plugin files with baked token/port and merges MCP client configs (Cursor stdio + OpenCode V2) with preserved backups", () => {
@@ -79,9 +79,19 @@ describe("CLI --setup installer", () => {
       assert.equal(ocCfg.mcp.servers.figcp.type, "local");
       assert.equal("figcp" in ocCfg.mcp, false);
 
-      // 3. Re-running setup preserves original .figcp.bak
+      // 3. Re-running setup preserves original .figcp.bak and cleanly replaces TOML sections without orphaned keys
       runSetup({ homeDir: fakeHome, pluginDistDir: fakeDist, port: 2027 });
       assert.equal(readFileSync(join(fakeHome, ".cursor", "mcp.json.figcp.bak"), "utf8"), originalCursor);
+      const codexTomlAfter = readFileSync(join(fakeHome, ".codex", "config.toml"), "utf8");
+      assert.equal(codexTomlAfter.match(/\[mcp_servers\.figcp\]/g)?.length, 1);
+      assert.equal(codexTomlAfter.match(/\[mcp_servers\.figcp\.env\]/g)?.length, 1);
+      assert.equal(codexTomlAfter.match(/^command\s*=/gm)?.length, 1);
+      assert.equal(codexTomlAfter.match(/^args\s*=/gm)?.length, 1);
+      assert.equal(codexTomlAfter.match(/^FIGCP_HOME\s*=/gm)?.length, 1);
+      assert.equal(codexTomlAfter.match(/^FIGCP_PORT\s*=/gm)?.length, 1);
+      assert.equal(codexTomlAfter.includes('FIGCP_PORT = "2026"'), false);
+      assert.ok(codexTomlAfter.includes('FIGCP_PORT = "2027"'));
+      assert.ok(codexTomlAfter.includes('model = "gpt-5"'));
     } finally {
       rmSync(fakeHome, { recursive: true, force: true });
       rmSync(fakeDist, { recursive: true, force: true });
@@ -121,5 +131,51 @@ describe("CLI --setup installer", () => {
     assert.ok(Array.isArray(report.checks));
     assert.ok(report.checks.some((c) => c.name === "Node.js Runtime" && c.ok));
     assert.ok(report.checks.some((c) => c.name === "Bridge Health"));
+  });
+
+  it("replaces middle TOML sections cleanly without leaving orphaned keys", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "figcp-toml-"));
+    try {
+      const tomlPath = join(tempDir, "config.toml");
+      writeFileSync(
+        tomlPath,
+        [
+          '[projects."/tmp/demo"]',
+          'trust_level = "trusted"',
+          "",
+          "[mcp_servers.figcp]",
+          'command = "old-node"',
+          'args = ["old.js"]',
+          "",
+          "[mcp_servers.figcp.env]",
+          'FIGCP_PORT = "1111"',
+          "",
+          "[tui]",
+          "enabled = true",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const status = mergeTomlServerEntry(
+        tomlPath,
+        "figcp",
+        "new-node",
+        ["new.js"],
+        { FIGCP_HOME: "/tmp/.figcp", FIGCP_PORT: "1994" },
+        false,
+      );
+      assert.equal(status, "updated");
+
+      const updated = readFileSync(tomlPath, "utf8");
+      assert.equal(updated.includes("old-node"), false);
+      assert.equal(updated.includes("1111"), false);
+      assert.equal(updated.match(/\[mcp_servers\.figcp\]/g)?.length, 1);
+      assert.equal(updated.match(/\[mcp_servers\.figcp\.env\]/g)?.length, 1);
+      assert.ok(updated.includes('[projects."/tmp/demo"]\ntrust_level = "trusted"'));
+      assert.ok(updated.includes("[tui]\nenabled = true"));
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

@@ -121,6 +121,36 @@ export function mergeJsonMcpConfig(
   return "updated";
 }
 
+/**
+ * Removes `[mcp_servers.<serverKey>]` and any nested `[mcp_servers.<serverKey>.*]`
+ * TOML sections line-by-line without leaving orphaned key-value pairs behind.
+ */
+export function stripTomlSections(content: string, serverKey: string): string {
+  const lines = content.split(/\r?\n/);
+  const result: string[] = [];
+  let inTargetSection = false;
+  const targetPrefix = `mcp_servers.${serverKey}`;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const tableMatch = trimmed.match(/^\[+([^\]]+)\]+/);
+    if (tableMatch?.[1]) {
+      const tableName = tableMatch[1].trim();
+      if (tableName === targetPrefix || tableName.startsWith(`${targetPrefix}.`)) {
+        inTargetSection = true;
+        continue;
+      }
+      inTargetSection = false;
+    }
+
+    if (!inTargetSection) {
+      result.push(line);
+    }
+  }
+
+  return result.join("\n").trimEnd();
+}
+
 export function mergeTomlServerEntry(
   filePath: string,
   serverKey: string,
@@ -153,12 +183,7 @@ args = [${args.map((a) => JSON.stringify(a)).join(", ")}]${
     envLines ? `\n\n[mcp_servers.${serverKey}.env]\n${envLines}` : ""
   }`;
 
-  // Remove any existing [mcp_servers.<serverKey>] sections before appending cleanly
-  const sectionPattern = new RegExp(
-    `^\\s*\\[mcp_servers\\.${serverKey}(?:\\.[^\\]]+)?\\][\\s\\S]*?(?=^\\s*\\[(?!mcp_servers\\.${serverKey}(?:\\.|\\]) )|$)`,
-    "gm",
-  );
-  const stripped = content.replace(sectionPattern, "").trimEnd();
+  const stripped = stripTomlSections(content, serverKey);
   const newContent = stripped.length > 0 ? `${stripped}\n\n${tomlBlock}\n` : `${tomlBlock}\n`;
 
   if (!dryRun) {
