@@ -84,13 +84,17 @@ function computeLocalFileKey(): string {
 }
 
 function sendHello(): void {
-  figma.ui.postMessage({
-    type: "hello",
-    fileKey: computeLocalFileKey(),
-    fileName: figma.root.name,
-    pageName: figma.currentPage.name,
-    pluginVersion: PLUGIN_VERSION,
-  });
+  try {
+    figma.ui.postMessage({
+      type: "hello",
+      fileKey: computeLocalFileKey(),
+      fileName: figma.root.name || "Untitled",
+      pageName: figma.currentPage?.name ?? "",
+      pluginVersion: PLUGIN_VERSION,
+    });
+  } catch {
+    // Ignore postMessage errors if UI is closing
+  }
 }
 
 if (typeof figma.on === "function") {

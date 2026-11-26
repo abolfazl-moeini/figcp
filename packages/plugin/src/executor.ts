@@ -154,6 +154,10 @@ function createGuardedFigmaProxy<T>(target: T, state: ExecutionState): T {
           throw new Error("Plugin script aborted after timeout");
         }
         const value = Reflect.get(innerTarget, prop, innerTarget);
+        const desc = Object.getOwnPropertyDescriptor(innerTarget, prop);
+        if (desc && !desc.configurable && !desc.writable) {
+          return value;
+        }
         if (typeof value === "function") {
           const propName = typeof prop === "string" ? prop : "";
           return (...args: unknown[]) => {

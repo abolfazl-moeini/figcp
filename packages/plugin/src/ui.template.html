@@ -190,7 +190,6 @@
       }
 
       window.onmessage = (event) => {
-        if (event.source !== window.parent) return;
         const msg = event.data && event.data.pluginMessage;
         if (!msg || typeof msg !== "object") return;
         if (msg.type !== "hello" && msg.type !== "rpc_response") return;

@@ -2,6 +2,8 @@
 
 > **TL;DR:** Local-first, zero-quota, bidirectional **Figma Desktop Plugin + MCP stdio bridge**. Lets AI coding agents create components, verify RTL layouts, export design context and assets, and link to existing code directly inside Figma Desktop (100% Free/Starter plan compatible, local OS fonts like `IRANSansXFaNum` supported, zero Figma PAT/REST API needed).
 
+![figcp closed-loop self-healing demo in Figma Desktop](assets/demo.gif)
+
 ---
 
 ## Why `figcp`?
