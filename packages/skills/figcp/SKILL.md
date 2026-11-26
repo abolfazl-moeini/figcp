@@ -66,5 +66,6 @@ Call `inspect_design_system` with `format: "dtcg"`:
 ### Step 4 — Verify Implementation with `ui-level` (Optional)
 If visual or DOM verification is needed:
 1. Pass `exportUiLevelDir: ".ui-level/snapshots"` to `get_design_context`.
-2. If `uiLevel` is not yet enabled, ask the user before enabling: `"Would you like me to enable ui-level for visual and DOM style verification? (Run figcp --enable-ui-level)"`.
-3. Run `ui-level check` or compare rendered frontend output against the exported reference screenshot.
+2. If `uiLevel` is not yet installed or enabled, it is available from npm as [`ui-level`](https://www.npmjs.com/package/ui-level):
+   - Enable via CLI: `figcp --enable-ui-level` or `figcp --install-ui-level` (or run `npm install -g ui-level` / `npx -y ui-level mcp`).
+3. Run `npx ui-level check --spec <path>/spec.json` or compare rendered frontend output against the exported reference screenshot.

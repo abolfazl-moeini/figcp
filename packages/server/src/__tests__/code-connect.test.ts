@@ -3,7 +3,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { detectUiLevel, getUiLevelConfig, setUiLevelConfig } from "../cli/ui-level-addon.ts";
+import {
+  detectUiLevel,
+  enableUiLevelAddon,
+  getUiLevelConfig,
+  registerUiLevelMcpClients,
+  setUiLevelConfig,
+} from "../cli/ui-level-addon.ts";
 import { loadCodeConnectMap, matchCodeConnect } from "../code-connect.ts";
 
 describe("Code Connect & ui-level Addon", () => {
@@ -58,6 +64,29 @@ describe("Code Connect & ui-level Addon", () => {
       assert.equal(typeof detected, "boolean");
     } finally {
       rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  it("registers ui-level across MCP client configurations cleanly", () => {
+    const fakeHome = mkdtempSync(join(tmpdir(), "figcp-regui-"));
+    try {
+      // Create mock directories for Cursor and OpenCode
+      mkdirSync(join(fakeHome, ".cursor"), { recursive: true });
+      mkdirSync(join(fakeHome, ".config", "opencode"), { recursive: true });
+
+      const reg = registerUiLevelMcpClients({ homeDir: fakeHome, dryRun: false });
+      assert.ok(reg.updatedClients.length >= 2);
+      assert.ok(reg.updatedClients.some((c) => c.startsWith("Cursor")));
+      assert.ok(reg.updatedClients.some((c) => c.startsWith("OpenCode")));
+
+      const addon = enableUiLevelAddon(join(fakeHome, ".figcp"), {
+        homeDir: fakeHome,
+        installPackage: false,
+      });
+      assert.ok(addon.ok);
+      assert.equal(getUiLevelConfig(join(fakeHome, ".figcp")).uiLevel, "enabled");
+    } finally {
+      rmSync(fakeHome, { recursive: true, force: true });
     }
   });
 });

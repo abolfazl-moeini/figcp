@@ -22,6 +22,7 @@ async function promptYesNo(question: string): Promise<boolean> {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const withUiLevel = args.includes("--enable-ui-level") || args.includes("--with-ui-level");
+  const installUiLevel = args.includes("--install-ui-level");
   const isSetup = args.includes("--setup") || args.includes("--dry-run") || args.includes("--install-skill");
 
   if (args.includes("--help") || args.includes("-h")) {
@@ -34,7 +35,8 @@ async function main(): Promise<void> {
         "  figcp --setup          Install plugin files to ~/.figcp/plugin/ and register MCP clients",
         "  figcp --doctor         Diagnose local Node, plugin, token, port, and client health",
         "  figcp --install-skill  Install figcp SKILL.md to AI coding agents (~/.gemini or ~/.agents)",
-        "  figcp --with-ui-level  Enable optional ui-level visual/DOM verification integration",
+        "  figcp --with-ui-level  Enable optional ui-level (npm: ui-level) verification integration",
+        "  figcp --install-ui-level Install `ui-level` from npm globally and configure MCP clients",
         "  figcp --no-prompt      Skip optional interactive prompts during --setup",
         "  figcp --dry-run        Preview --setup changes without writing files",
         "  figcp --print-path     Print the Figma plugin manifest.json path",
@@ -86,8 +88,8 @@ async function main(): Promise<void> {
     );
 
     if (!dryRun) {
-      if (withUiLevel) {
-        const res = enableUiLevelAddon();
+      if (withUiLevel || installUiLevel) {
+        const res = enableUiLevelAddon(undefined, { installPackage: installUiLevel });
         process.stderr.write(`${res.message}\n`);
       } else if (
         args.includes("--setup") &&
@@ -97,7 +99,7 @@ async function main(): Promise<void> {
         getUiLevelConfig().uiLevel === "disabled"
       ) {
         const accepted = await promptYesNo(
-          "Enable optional ui-level verification for Figma -> Code workflows? (off by default) [y/N]: ",
+          "Enable optional ui-level (npm: ui-level) verification for Figma -> Code workflows? [y/N]: ",
         );
         if (accepted) {
           const res = enableUiLevelAddon();
@@ -110,8 +112,8 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (withUiLevel) {
-    const res = enableUiLevelAddon();
+  if (withUiLevel || installUiLevel) {
+    const res = enableUiLevelAddon(undefined, { installPackage: installUiLevel });
     process.stderr.write(`${res.message}\n`);
     return;
   }

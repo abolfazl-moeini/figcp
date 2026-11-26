@@ -64,7 +64,7 @@ function defaultServerEntryPath(): string {
   return candidates[1]!;
 }
 
-function mergeJsonMcpConfig(
+export function mergeJsonMcpConfig(
   filePath: string,
   sectionPath: readonly string[],
   entryName: string,
@@ -121,12 +121,12 @@ function mergeJsonMcpConfig(
   return "updated";
 }
 
-function mergeTomlMcpConfig(
+export function mergeTomlServerEntry(
   filePath: string,
-  serverEntry: string,
-  nodeBin: string,
-  figcpHome: string,
-  port: number,
+  serverKey: string,
+  command: string,
+  args: string[],
+  env: Record<string, string>,
   dryRun: boolean,
 ): "updated" | "skipped" {
   const parentDir = dirname(filePath);
@@ -143,19 +143,23 @@ function mergeTomlMcpConfig(
     }
   }
 
-  const tomlBlock = `[mcp_servers.figcp]
-command = ${JSON.stringify(nodeBin)}
-args = [${JSON.stringify(serverEntry)}]
+  const envLines = Object.entries(env)
+    .map(([k, v]) => `${k} = ${JSON.stringify(v)}`)
+    .join("\n");
 
-[mcp_servers.figcp.env]
-FIGCP_HOME = ${JSON.stringify(figcpHome)}
-FIGCP_PORT = ${JSON.stringify(String(port))}`;
+  const tomlBlock = `[mcp_servers.${serverKey}]
+command = ${JSON.stringify(command)}
+args = [${args.map((a) => JSON.stringify(a)).join(", ")}]${
+    envLines ? `\n\n[mcp_servers.${serverKey}.env]\n${envLines}` : ""
+  }`;
 
-  let newContent: string;
-  // Remove any existing [mcp_servers.figcp] or [mcp_servers.figcp.*] sections before appending cleanly
-  const anyFigcpSection = /^\s*\[mcp_servers\.figcp(?:\.[^\]]+)?\][\s\S]*?(?=^\s*\[(?!mcp_servers\.figcp(?:\.|\]) )|$)/gm;
-  const stripped = content.replace(anyFigcpSection, "").trimEnd();
-  newContent = stripped.length > 0 ? `${stripped}\n\n${tomlBlock}\n` : `${tomlBlock}\n`;
+  // Remove any existing [mcp_servers.<serverKey>] sections before appending cleanly
+  const sectionPattern = new RegExp(
+    `^\\s*\\[mcp_servers\\.${serverKey}(?:\\.[^\\]]+)?\\][\\s\\S]*?(?=^\\s*\\[(?!mcp_servers\\.${serverKey}(?:\\.|\\]) )|$)`,
+    "gm",
+  );
+  const stripped = content.replace(sectionPattern, "").trimEnd();
+  const newContent = stripped.length > 0 ? `${stripped}\n\n${tomlBlock}\n` : `${tomlBlock}\n`;
 
   if (!dryRun) {
     const bakPath = `${filePath}.figcp.bak`;
@@ -165,6 +169,27 @@ FIGCP_PORT = ${JSON.stringify(String(port))}`;
     writeFileSync(filePath, newContent, "utf8");
   }
   return "updated";
+}
+
+export function mergeTomlMcpConfig(
+  filePath: string,
+  serverEntry: string,
+  nodeBin: string,
+  figcpHome: string,
+  port: number,
+  dryRun: boolean,
+): "updated" | "skipped" {
+  return mergeTomlServerEntry(
+    filePath,
+    "figcp",
+    nodeBin,
+    [serverEntry],
+    {
+      FIGCP_HOME: figcpHome,
+      FIGCP_PORT: String(port),
+    },
+    dryRun,
+  );
 }
 
 export function runSetup(options: SetupOptions = {}): SetupResult {

@@ -531,7 +531,14 @@ export function createFigcpMcpServer(transport: TransportNode): McpServer {
       const uiLevelMeta = {
         available: uiLevelInstalled,
         status: uiLevelConfig.uiLevel ?? "disabled",
-        ...(uiLevelExportPath ? { exportedSpecPath: uiLevelExportPath } : {}),
+        package: "ui-level (npm)",
+        npmUrl: "https://www.npmjs.com/package/ui-level",
+        ...(uiLevelExportPath
+          ? {
+              exportedSpecPath: uiLevelExportPath,
+              suggestedCommand: `npx ui-level check --spec ${uiLevelExportPath}`,
+            }
+          : {}),
       };
 
       const payload = {

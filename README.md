@@ -73,8 +73,10 @@ npm run doctor    # verify local environment and bridge health
 `figcp` core is 100% self-contained and requires zero heavy browser or native image dependencies. You can optionally pair it with:
 
 - **`ui-level`** (Visual & DOM Verification):
+  - Published on npm: [`ui-level`](https://www.npmjs.com/package/ui-level).
   - When enabled, `get_design_context` exports `spec.json` (`NormalizedSpec`) and `reference.png` ready for offline Playwright/CDP DOM geometry + CIEDE2000 ΔE verification.
-  - Enable explicitly with: `node packages/server/dist/index.js --setup --with-ui-level` (or `--enable-ui-level`). Use `--no-prompt` to skip interactive prompts during setup.
+  - Enable explicitly with: `node packages/server/dist/index.js --setup --with-ui-level` (or `--enable-ui-level`). To install globally from npm and configure all MCP clients automatically, run: `node packages/server/dist/index.js --install-ui-level`.
+  - Use `--no-prompt` to skip interactive prompts during setup.
 - **Terrazzo** / **Tokens Studio**:
   - Export DTCG tokens via `inspect_design_system({ format: "dtcg" })` and transform to Tailwind v4 / CSS variables with Terrazzo.
 - **SVGO**:

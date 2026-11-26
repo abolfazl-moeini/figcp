@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveFigcpHome } from "../auth.ts";
+import { detectUiLevel, getUiLevelConfig } from "./ui-level-addon.ts";
 
 export interface DoctorCheck {
   name: string;
@@ -116,7 +117,20 @@ export async function runDoctor(options: {
         : 'No MCP client configurations detected with "figcp". Run "figcp --setup".',
   });
 
-  // 5. Port & Bridge Reachability
+  // 5. ui-level optional integration status
+  const uiCfg = getUiLevelConfig(figcpHome);
+  if (uiCfg.uiLevel === "enabled") {
+    const uiInstalled = detectUiLevel();
+    checks.push({
+      name: "ui-level Addon (npm)",
+      ok: uiInstalled,
+      message: uiInstalled
+        ? "ui-level binary detected on PATH (https://www.npmjs.com/package/ui-level)"
+        : 'ui-level is enabled in config but missing on PATH. Run "npm install -g ui-level".',
+    });
+  }
+
+  // 6. Port & Bridge Reachability
   const token = existsSync(tokenPath) ? readFileSync(tokenPath, "utf8").trim() : "";
   try {
     const res = await fetch(`http://127.0.0.1:${port}/ping`, {
