@@ -9,8 +9,6 @@
   "networkAccess": {
     "allowedDomains": ["none"],
     "devAllowedDomains": [
-      "http://127.0.0.1:1994",
-      "ws://127.0.0.1:1994",
       "http://localhost:1994",
       "ws://localhost:1994"
     ]

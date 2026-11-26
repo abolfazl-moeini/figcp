@@ -67,7 +67,7 @@
       <div id="dot" class="dot"></div>
       <div class="meta">
         <div id="status" class="status">Connecting...</div>
-        <div id="sub" class="sub">127.0.0.1:__FIGCP_PORT__</div>
+        <div id="sub" class="sub">localhost:__FIGCP_PORT__</div>
       </div>
     </div>
     <button id="reconnect" type="button">Reconnect</button>
@@ -124,7 +124,7 @@
         const gen = ++connectionGen;
         let socket;
         try {
-          socket = new WebSocket("ws://127.0.0.1:" + PORT + "/ws?token=" + encodeURIComponent(TOKEN));
+          socket = new WebSocket("ws://localhost:" + PORT + "/ws?token=" + encodeURIComponent(TOKEN));
         } catch (err) {
           setUi("error", "WS Error", String(err));
           scheduleReconnect();
@@ -138,7 +138,7 @@
             return;
           }
           retryDelay = 300;
-          setUi("connected", "Connected", "127.0.0.1:" + PORT);
+          setUi("connected", "Connected", "localhost:" + PORT);
           if (helloPayload) {
             socket.send(JSON.stringify(helloPayload));
           } else {

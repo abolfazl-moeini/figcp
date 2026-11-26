@@ -232,9 +232,9 @@ export function runSetup(options: SetupOptions = {}): SetupResult {
       networkAccess?: { devAllowedDomains?: string[] };
     };
     if (manifestObj.networkAccess && Array.isArray(manifestObj.networkAccess.devAllowedDomains)) {
-      manifestObj.networkAccess.devAllowedDomains = manifestObj.networkAccess.devAllowedDomains.map(
-        (domain) => domain.replace(/:\d+$/, `:${port}`),
-      );
+      manifestObj.networkAccess.devAllowedDomains = manifestObj.networkAccess.devAllowedDomains
+        .filter((domain) => !domain.includes("127.0.0.1"))
+        .map((domain) => domain.replace(/:\d+$/, `:${port}`));
     }
     writeFileSync(manifestPath, `${JSON.stringify(manifestObj, null, 2)}\n`, "utf8");
     copyFileSync(codeSrc, join(pluginDir, "code.js"));
