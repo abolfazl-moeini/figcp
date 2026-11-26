@@ -25,9 +25,10 @@
   ],
   "type": "module",
   "bin": {
-    "figcp": "./packages/server/dist/index.js"
+    "figcp": "bin/figcp.js"
   },
   "files": [
+    "bin/figcp.js",
     "packages/server/dist/index.js",
     "packages/plugin/dist/manifest.json",
     "packages/plugin/dist/code.js",
