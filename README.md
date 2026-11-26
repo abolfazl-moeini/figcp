@@ -4,6 +4,28 @@
 
 ---
 
+## Why `figcp`?
+
+Most Figma MCP servers rely on the Figma REST API — which makes them **read-only**, subject to strict rate limits, blind to local OS fonts, and locked behind paid Enterprise plans for Variables and Code Connect. `figcp` runs **inside Figma Desktop** over a local loopback bridge:
+
+| Capability | Typical REST API MCP | `figcp` |
+| :--- | :---: | :---: |
+| **100% Free / Starter Plan Compatible (Zero PAT / Quota)** | ❌ | ✅ |
+| **Truly Bidirectional (`AI → Figma` + `Figma → Code`)** | ❌ (Read-only) | ✅ |
+| **Deterministic Layout/Token Linter + Screenshot Self-Healing** | ❌ | ✅ |
+| **Local OS Fonts & RTL/Persian Bidi Verification** | ❌ | ✅ |
+| **Local Code Connect (`figcp.map.json`) without Enterprise** | ❌ | ✅ |
+| **Zero-Quota SVG/PNG Asset & W3C DTCG Token Export** | ⚠️ Rate-limited | ✅ |
+
+- **100% Free & Zero REST API / PAT:** Works natively on the **Figma Starter (Free) Plan** with zero rate limits or API tokens.
+- **Truly Bidirectional (`AI ↔ Code`):**
+  - `AI → Figma`: Create/edit components via `run_figma_js`, catch overflow/overlap/unbound-token/RTL bugs via `inspect_node_bounds`, inspect inline PNG screenshots, and self-heal (or `figma_undo`).
+  - `Figma → Code`: Extract Flexbox CSS & bound tokens via `get_design_context`, export SVG/PNG assets via `export_node_assets`, export W3C DTCG tokens, and verify rendered DOM/visual parity with [`ui-level`](https://www.npmjs.com/package/ui-level).
+- **Local OS Fonts & RTL Support:** Uses fonts installed on your macOS/Windows machine (e.g., `IRANSansXFaNum`, `Vazirmatn`) directly inside Figma Desktop.
+- **Local Code Connect (`figcp.map.json`):** Map Figma components directly to your codebase components so agents reuse existing UI instead of duplicating it.
+
+---
+
 ## Requirements
 
 - **Node.js `>= 22.0.0`**
