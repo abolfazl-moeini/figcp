@@ -66,17 +66,18 @@ Open Figma Desktop Document (multi-file routing via fileKey)
 
 ---
 
-## 4. Minimal MCP Tool Surface (7 Focused Tools)
+## 4. MCP Tool Surface (8 Focused Tools)
 
-To avoid bloating the AI client's context window, `packages/server` exposes **7 focused MCP tools**:
+To avoid bloating the AI client's context window while covering the full design-system lifecycle, `packages/server` exposes **8 focused MCP tools**:
 
 1. **`figma_status`**: Reports bridge role, port, connected Figma files, and recent manual canvas edits (`manualChanges`).
 2. **`run_figma_js`**: Executes arbitrary Figma Plugin API JS inside the target file (`fileKey` optional when 1 file is connected). Runs inside a **serial queue** with configurable timeout (default 30s, max 180s), injects `figma` and `helpers`, captures `console.log/warn/error`, calls `figma.commitUndo()` on mutation, and returns `{ ok, result, logs, error, durationMs }`.
 3. **`inspect_design_system`**: Returns a compact, structured snapshot of the target file's Local Variable Collections (with resolved hex & alias chains), Local Paint/Text/Effect Styles, Component Sets & standalone Components, and available fonts (filterable by `fontQuery`, e.g., `IRANSans`), or exports W3C DTCG tokens (`format: "dtcg"`).
 4. **`inspect_node_bounds`**: Inspects a node subtree (depth-limited) returning `id`, `name`, `type`, `absoluteBoundingBox`, `absoluteRenderBounds`, Auto Layout settings, bound variable names, **deterministic lint findings** (overflow, sibling overlap, unbound raw colors/spacing, RTL alignment/font checks), and optional inline PNG screenshot (`exportAsync`) returned as native MCP `ImageContent`.
 5. **`figma_undo`**: Reverts the last checkpointed `run_figma_js` mutation (via `figma.triggerUndo()`), or saves a named version snapshot (`figma.saveVersionHistoryAsync`) before risky refactors.
-6. **`get_design_context`**: Extracts code-generation design context (Auto Layout flexbox, fills/strokes + bound variable names, effects, typography, async `getMainComponentAsync` metadata), matches `figcp.map.json` Local Code Connect mappings (supports `workspaceDir`), and optionally writes `spec.json` + `reference.png` (`exportUiLevelDir`) compatible with `ui-level`.
-7. **`export_node_assets`**: Exports a node as clean `SVG` or `PNG` via `exportAsync` (returned inline or written to `outputDir` with path-traversal protection).
+6. **`get_design_context`**: Extracts code-generation design context (Auto Layout flexbox/grid, fills/strokes + bound variable names, effects, typography, async `getMainComponentAsync` metadata), matches `figcp.map.json` Local Code Connect mappings (supports `workspaceDir`), and atomically writes `spec.json` + `reference.png` (`exportUiLevelDir`) compatible with `ui-level`.
+7. **`export_node_assets`**: Exports a node as clean `SVG` or `PNG` via `exportAsync` (returned inline or written to `outputDir` with path-traversal protection and unique suffix allocation).
+8. **`import_web_to_figma`**: **Pipeline 3 (`Live Web → Figma`)**: Captures live web pages or connected user browser tabs via loopback CDP (`Chrome DevTools Protocol`), extracts DOM hierarchy, 1x1 canvas-resolved color tokens (`oklch`, `color-mix`, etc.), CSS variables (`:root --*`), Auto Layout flex/grid heuristics (`per_row`, `maxWidth`), font metadata (with bundler hash-prefix stripping), and interactive component states (`details`, `tabs`, `menus`), builds native Figma frame/text/SVG/image trees and Variable collections, and runs automatic post-import lint verification. Also exposed via CLI: `figcp capture-web <url> [--cdp <port>] [--states]`.
 
 ---
 
