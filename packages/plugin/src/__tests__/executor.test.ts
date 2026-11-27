@@ -1,8 +1,46 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { SerialPluginExecutor } from "../executor.ts";
+import { safeSerialize, SerialPluginExecutor } from "../executor.ts";
 
 describe("SerialPluginExecutor", () => {
+  it("commits only when a script mutates, including a cooperative timeout", async () => {
+    let checkpoints = 0;
+    const figma = {
+      currentPage: { name: "Page 1" },
+      set name(_value: string) {},
+      commitUndo: () => { checkpoints++; },
+      clone: () => ({ id: "clone" }),
+    };
+    const executor = new SerialPluginExecutor();
+
+    const read = await executor.execute(`return figma.currentPage.name;`, figma, {});
+    assert.equal(read.ok, true);
+    assert.equal(checkpoints, 0);
+
+    const partialTimeout = await executor.execute(
+      `figma.name = "changed"; await new Promise(() => {});`,
+      figma,
+      {},
+      { timeoutMs: 20 },
+    );
+    assert.equal(partialTimeout.ok, false);
+    assert.equal(checkpoints, 1);
+
+    const cloneThenThrow = await executor.execute(
+      `figma.clone(); throw new Error("failed after clone");`, figma, {},
+    );
+    assert.equal(cloneThenThrow.ok, false);
+    assert.equal(checkpoints, 2);
+  });
+  it("preserves repeated references while marking actual cycles", () => {
+    const shared = { value: 1 };
+    assert.deepEqual(safeSerialize({ first: shared, second: shared }), {
+      first: { value: 1 }, second: { value: 1 },
+    });
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    assert.deepEqual(safeSerialize(cycle), { self: "[Circular]" });
+  });
   it("executes async code, captures logs, and commits undo on success", async () => {
     let undoCommitted = 0;
     const mockFigma = {
@@ -28,7 +66,7 @@ describe("SerialPluginExecutor", () => {
       assert.equal(res.logs[1]?.level, "warn");
       assert.equal(res.logs[2]?.level, "error");
     }
-    assert.equal(undoCommitted, 1);
+    assert.equal(undoCommitted, 0);
   });
 
   it("captures thrown errors + stack trace and skips commitUndo", async () => {
@@ -150,7 +188,7 @@ describe("SerialPluginExecutor", () => {
     );
     assert.equal(next.ok, true);
     assert.equal(createdAfterTimeout, 0);
-    assert.equal(undoCommitted, 1);
+    assert.equal(undoCommitted, 0);
     assert.deepEqual(
       next.logs.map((l) => l.args[0]),
       ["clean-log"],

@@ -23,7 +23,7 @@ export async function runDoctor(options: {
   port?: number;
 } = {}): Promise<DoctorReport> {
   const userHome = options.homeDir ?? homedir();
-  const figcpHome = options.figcpHome ?? resolveFigcpHome(join(userHome, ".figcp"));
+  const figcpHome = resolveFigcpHome(options.figcpHome, userHome);
   const port = options.port ?? Number(process.env.FIGCP_PORT ?? 1994);
   const checks: DoctorCheck[] = [];
 

@@ -38,7 +38,7 @@ Call `inspect_node_bounds` with `includeScreenshot: true`:
 
 ### Step 4 — Self-Heal or Revert
 - Apply surgical patches via `run_figma_js` and re-verify.
-- In case of unexpected broken state, call `figma_undo` (`action: "undo"`) to restore the previous checkpoint.
+- In case of unexpected broken state, `figma_undo` (`action: "undo"`) undoes the latest Figma document step. It can include intervening user edits, so check recent canvas activity first. `run_figma_js` checkpoints detected mutations by default; read-only scripts do not add a checkpoint.
 
 ---
 

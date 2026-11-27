@@ -297,7 +297,7 @@ export const DesignContextNodeSchema: z.ZodType<Record<string, unknown>> = z.laz
     type: z.string().min(1),
     rect: BoundingBoxSchema,
     relativeRect: BoundingBoxSchema.optional(),
-    layoutMode: z.enum(["NONE", "HORIZONTAL", "VERTICAL"]).optional(),
+    layoutMode: z.enum(["NONE", "HORIZONTAL", "VERTICAL", "GRID"]).optional(),
     itemSpacing: z.number().optional(),
     padding: z
       .object({

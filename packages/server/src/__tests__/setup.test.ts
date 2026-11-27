@@ -178,4 +178,30 @@ describe("CLI --setup installer", () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("respects FIGCP_HOME over default userHome/.figcp in runSetup", () => {
+    const fakeHome = mkdtempSync(join(tmpdir(), "figcp-home-"));
+    const customFigcpHome = mkdtempSync(join(tmpdir(), "figcp-env-home-"));
+    const fakeDist = mkdtempSync(join(tmpdir(), "figcp-dist-env-"));
+    const prevEnv = process.env.FIGCP_HOME;
+    process.env.FIGCP_HOME = customFigcpHome;
+    try {
+      writeFileSync(join(fakeDist, "manifest.json"), "{}", "utf8");
+      writeFileSync(join(fakeDist, "code.js"), "", "utf8");
+      writeFileSync(join(fakeDist, "ui.template.html"), "PORT=__FIGCP_PORT__;TOKEN=__FIGCP_TOKEN__", "utf8");
+      mkdirSync(join(fakeHome, ".cursor"), { recursive: true });
+
+      const res = runSetup({ homeDir: fakeHome, pluginDistDir: fakeDist });
+      assert.equal(res.tokenPath, join(customFigcpHome, "token"));
+      assert.equal(existsSync(join(fakeHome, ".figcp", "token")), false);
+      const cursor = JSON.parse(readFileSync(join(fakeHome, ".cursor", "mcp.json"), "utf8"));
+      assert.equal(cursor.mcpServers.figcp.env.FIGCP_HOME, customFigcpHome);
+    } finally {
+      if (prevEnv === undefined) delete process.env.FIGCP_HOME;
+      else process.env.FIGCP_HOME = prevEnv;
+      rmSync(fakeHome, { recursive: true, force: true });
+      rmSync(customFigcpHome, { recursive: true, force: true });
+      rmSync(fakeDist, { recursive: true, force: true });
+    }
+  });
 });

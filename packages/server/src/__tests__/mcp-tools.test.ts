@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -262,14 +263,32 @@ describe("MCP 7-tool server", () => {
   });
 
   it("spills payloads > 64 KB to disk with compact summary and preserves full file", () => {
-    const hugePayload = {
-      items: Array.from({ length: 2000 }, (_, i) => ({ id: `node-${i}`, data: "x".repeat(50) })),
-    };
-    const spilled = spillLargePayload("test_tool", hugePayload, 1024);
-    assert.ok(spilled.fullOutputPath);
-    const parsed = JSON.parse(spilled.text);
-    assert.equal(parsed.spilled, true);
-    assert.equal(parsed.tool, "test_tool");
-    assert.ok(parsed.byteLength > 1024);
+    const cacheDir = mkdtempSync(join(tmpdir(), "figcp-cache-test-"));
+    const previousCache = process.env.FIGCP_CACHE_DIR;
+    process.env.FIGCP_CACHE_DIR = cacheDir;
+    try {
+      // Unrelated user file and symlink must never be pruned
+      const userFile = join(cacheDir, "notes.txt");
+      writeFileSync(userFile, "keep-me", "utf8");
+      const symlinkTarget = join(cacheDir, "real.txt");
+      writeFileSync(symlinkTarget, "target", "utf8");
+      symlinkSync(symlinkTarget, join(cacheDir, "test_tool-1-abc123.json"));
+
+      const hugePayload = {
+        items: Array.from({ length: 2000 }, (_, i) => ({ id: `node-${i}`, data: "x".repeat(50) })),
+      };
+      const spilled = spillLargePayload("test_tool", hugePayload, 1024);
+      assert.ok(spilled.fullOutputPath?.startsWith(cacheDir));
+      const parsed = JSON.parse(spilled.text);
+      assert.equal(parsed.spilled, true);
+      assert.equal(parsed.tool, "test_tool");
+      assert.ok(parsed.byteLength > 1024);
+      assert.equal(readFileSync(userFile, "utf8"), "keep-me");
+      assert.ok(readdirSync(cacheDir).includes(basename(spilled.fullOutputPath!)));
+    } finally {
+      if (previousCache === undefined) delete process.env.FIGCP_CACHE_DIR;
+      else process.env.FIGCP_CACHE_DIR = previousCache;
+      rmSync(cacheDir, { recursive: true, force: true });
+    }
   });
 });

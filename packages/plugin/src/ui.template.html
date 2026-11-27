@@ -177,8 +177,8 @@
         };
 
         socket.onclose = () => {
-          clearWatchdogs();
           if (gen !== connectionGen) return;
+          clearWatchdogs();
           activeWs = null;
           scheduleReconnect();
         };

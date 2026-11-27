@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { toDtcgTokens } from "../dtcg-export.ts";
 import type { DesignSystemSnapshot } from "../protocol.ts";
+import { DesignContextNodeSchema } from "../protocol.ts";
 import { toUiLevelNormalizedSpec, type DesignContextNode } from "../ui-level-export.ts";
 
 describe("DTCG & ui-level Cross-Contract Exporters", () => {
@@ -139,5 +140,34 @@ describe("DTCG & ui-level Cross-Contract Exporters", () => {
     assert.equal(child.styles.lineHeight, 20);
     assert.equal(child.styles.color, "#1e293b");
     assert.deepEqual(child.rect, { x: 20, y: 16, width: 280, height: 32 });
+  });
+
+  it("accepts Grid context without exporting it as column flex", () => {
+    const grid: DesignContextNode = {
+      id: "grid", name: "Grid", type: "FRAME",
+      rect: { x: 0, y: 0, width: 100, height: 100 }, layoutMode: "GRID",
+    };
+    assert.equal(DesignContextNodeSchema.safeParse(grid).success, true);
+    const spec = toUiLevelNormalizedSpec(grid);
+    assert.equal(spec.nodes[0]?.styles.display, undefined);
+  });
+
+  it("infers text direction from script and maps spaced weights and percent tracking", () => {
+    const root: DesignContextNode = {
+      id: "root", name: "Root", type: "FRAME", rect: { x: 0, y: 0, width: 300, height: 100 },
+      children: [
+        { id: "en", name: "English", type: "TEXT", rect: { x: 0, y: 0, width: 100, height: 20 }, typography: { characters: "Hello", textAlign: "RIGHT", fontWeight: "Extra Light", fontSize: 20, letterSpacing: "10%" } },
+        { id: "fa", name: "Persian", type: "TEXT", rect: { x: 0, y: 30, width: 100, height: 20 }, typography: { characters: "سلام", textAlign: "CENTER", fontWeight: "Semi Bold", fontSize: 20, letterSpacing: "-5%" } },
+        { id: "mixed", name: "Mixed", type: "TEXT", rect: { x: 0, y: 60, width: 100, height: 20 }, typography: { characters: "سلام hello", textAlign: "RIGHT" } },
+      ],
+    };
+    const spec = toUiLevelNormalizedSpec(root);
+    assert.equal(spec.nodes[1]?.direction, "ltr");
+    assert.equal(spec.nodes[1]?.styles.fontWeight, 200);
+    assert.equal(spec.nodes[1]?.styles.letterSpacing, 2);
+    assert.equal(spec.nodes[2]?.direction, "rtl");
+    assert.equal(spec.nodes[2]?.styles.fontWeight, 600);
+    assert.equal(spec.nodes[2]?.styles.letterSpacing, -1);
+    assert.equal(spec.nodes[3]?.direction, undefined);
   });
 });

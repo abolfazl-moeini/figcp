@@ -162,4 +162,24 @@ describe("@figcp/linter", () => {
     assert.ok(overflow);
     assert.equal(overflow.severity, "info");
   });
+
+  it("uses letters for RTL, treats font hints as advisory, and reports overlap budget skips", () => {
+    const root: NodeBoundsSummary = {
+      id: "root", name: "Root", type: "FRAME", layoutMode: "VERTICAL", itemSpacing: -8,
+      children: [
+        { id: "digits", name: "Digits", type: "TEXT", characters: "123٤٥٦ !؟", textAlignHorizontal: "LEFT" },
+        { id: "latin", name: "Latin", type: "TEXT", characters: "hello فارسی", textAlignHorizontal: "LEFT", fontName: { family: "Inter", style: "Regular" } },
+        ...Array.from({ length: 51 }, (_, index) => ({
+          id: `n${index}`, name: `N${index}`, type: "FRAME" as const,
+          absoluteBoundingBox: { x: 0, y: 0, width: 5, height: 5 },
+        })),
+      ],
+    };
+    const issues = lintNodeTree(root);
+    assert.equal(issues.some((issue) => issue.nodeId === "digits" && issue.rule === "rtl-alignment-mismatch"), false);
+    const fontHint = issues.find((issue) => issue.nodeId === "latin" && issue.rule === "rtl-font-mismatch");
+    assert.equal(fontHint?.severity, "info");
+    assert.equal(issues.some((issue) => issue.rule === "sibling-overlap"), false);
+    assert.ok(issues.some((issue) => issue.rule === "overlap-check-truncated"));
+  });
 });

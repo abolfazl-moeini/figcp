@@ -219,7 +219,7 @@ export function mergeTomlMcpConfig(
 
 export function runSetup(options: SetupOptions = {}): SetupResult {
   const userHome = options.homeDir ?? homedir();
-  const figcpHome = options.figcpHome ?? resolveFigcpHome(join(userHome, ".figcp"));
+  const figcpHome = resolveFigcpHome(options.figcpHome, userHome);
   const port = options.port ?? Number(process.env.FIGCP_PORT ?? 1994);
   const dryRun = options.dryRun ?? false;
   const pluginDistDir = options.pluginDistDir ?? defaultPluginDistDir();

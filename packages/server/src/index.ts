@@ -91,6 +91,7 @@ async function main(): Promise<void> {
       if (withUiLevel || installUiLevel) {
         const res = enableUiLevelAddon(undefined, { installPackage: installUiLevel });
         process.stderr.write(`${res.message}\n`);
+        if (!res.ok) process.exitCode = 1;
       } else if (
         args.includes("--setup") &&
         !args.includes("--no-prompt") &&
@@ -115,6 +116,7 @@ async function main(): Promise<void> {
   if (withUiLevel || installUiLevel) {
     const res = enableUiLevelAddon(undefined, { installPackage: installUiLevel });
     process.stderr.write(`${res.message}\n`);
+    if (!res.ok) process.exitCode = 1;
     return;
   }
 

@@ -1,6 +1,7 @@
 import type { BoundingBox, LintIssue, NodeBoundsSummary } from "@figcp/shared";
 
-const PERSIAN_ARABIC_RE = /[\u0600-\u06FF]/;
+const PERSIAN_ARABIC_LETTER_RE = /\p{Script=Arabic}/u;
+const LETTER_RE = /\p{Letter}/u;
 const LATIN_RE = /[A-Za-z]/;
 const CONTAINER_OVERFLOW_TOLERANCE_PX = 1;
 const OVERLAP_TOLERANCE_PX = 1;
@@ -105,7 +106,9 @@ export function lintNodeTree(root: NodeBoundsSummary): LintIssue[] {
 
     // 3. Persian / RTL typography checks
     if (node.type === "TEXT" && typeof node.characters === "string") {
-      const hasPersian = PERSIAN_ARABIC_RE.test(node.characters);
+      const hasPersian = Array.from(node.characters).some((char) =>
+        PERSIAN_ARABIC_LETTER_RE.test(char) && LETTER_RE.test(char),
+      );
       if (hasPersian && node.textAlignHorizontal === "LEFT") {
         issues.push({
           rule: "rtl-alignment-mismatch",
@@ -130,10 +133,10 @@ export function lintNodeTree(root: NodeBoundsSummary): LintIssue[] {
         if (LATIN_ONLY_FONTS.some((f) => fam.includes(f))) {
           issues.push({
             rule: "rtl-font-mismatch",
-            severity: "warning",
+            severity: "info",
             nodeId: node.id,
             nodeName: node.name,
-            message: `Persian/Arabic text uses Latin-only font "${(node.fontName as { family: string }).family}". Use a Persian font (e.g. "IRANSansXFaNum", "Vazirmatn") for correct shaping.`,
+            message: `Font family "${(node.fontName as { family: string }).family}" may not cover Persian/Arabic glyphs; verify installed font coverage.`,
           });
         }
       }
@@ -167,8 +170,18 @@ export function lintNodeTree(root: NodeBoundsSummary): LintIssue[] {
         (c) => c.layoutPositioning !== "ABSOLUTE" && c.absoluteBoundingBox,
       );
       const MAX_SIBLING_CHECK = 50;
+      if (flowChildren.length > MAX_SIBLING_CHECK) {
+        issues.push({
+          rule: "overlap-check-truncated",
+          severity: "info",
+          nodeId: node.id,
+          nodeName: node.name,
+          message: `Sibling overlap checks were limited to the first ${MAX_SIBLING_CHECK} of ${flowChildren.length} flow children.`,
+        });
+      }
       const checkedChildren = flowChildren.slice(0, MAX_SIBLING_CHECK);
-      for (let i = 0; i < checkedChildren.length; i++) {
+      const deliberateNegativeGap = typeof node.itemSpacing === "number" && node.itemSpacing < 0;
+      for (let i = 0; !deliberateNegativeGap && i < checkedChildren.length; i++) {
         for (let j = i + 1; j < checkedChildren.length; j++) {
           const a = checkedChildren[i]!;
           const b = checkedChildren[j]!;

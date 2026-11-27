@@ -45,8 +45,13 @@ export function getUiLevelConfig(figcpHome = resolveFigcpHome()): FigcpConfig {
   if (existsSync(cfgPath)) {
     try {
       const data = JSON.parse(readFileSync(cfgPath, "utf8"));
-      if (typeof data === "object" && data !== null) {
-        return data as FigcpConfig;
+      if (typeof data === "object" && data !== null && !Array.isArray(data)) {
+        const rec = data as Record<string, unknown>;
+        const uiLevel =
+          rec.uiLevel === "enabled" || rec.uiLevel === "disabled" || rec.uiLevel === "declined"
+            ? rec.uiLevel
+            : "disabled";
+        return { ...rec, uiLevel } as FigcpConfig;
       }
     } catch {
       // Ignored
@@ -179,6 +184,16 @@ export function enableUiLevelAddon(
   let installed = detectUiLevel();
   const pkgTarget = options.npmTag ? `ui-level@${options.npmTag}` : "ui-level";
 
+  if (options.dryRun) {
+    const clientReg = registerUiLevelMcpClients({ homeDir: options.homeDir, dryRun: true });
+    return {
+      ok: true,
+      installed,
+      message: `Dry-run: would enable ui-level in config and register MCP clients (${clientReg.updatedClients.length} updated).`,
+      updatedClients: clientReg.updatedClients,
+    };
+  }
+
   if (!installed && options.installPackage) {
     const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
     const installRes = spawnSync(npmCmd, ["install", "-g", pkgTarget], {
@@ -187,18 +202,17 @@ export function enableUiLevelAddon(
     if (installRes.status === 0) {
       installed = detectUiLevel();
     } else {
-      setUiLevelConfig("enabled", figcpHome);
       return {
         ok: false,
         installed: false,
-        message: `Failed to install \`${pkgTarget}\` globally via npm. Enabled in config; install manually with \`npm install -g ${pkgTarget}\`.`,
+        message: `Failed to install \`${pkgTarget}\` globally via npm. Prior config preserved; install manually with \`npm install -g ${pkgTarget}\`.`,
         updatedClients: [],
       };
     }
   }
 
   setUiLevelConfig("enabled", figcpHome);
-  const clientReg = registerUiLevelMcpClients({ homeDir: options.homeDir, dryRun: options.dryRun });
+  const clientReg = registerUiLevelMcpClients({ homeDir: options.homeDir, dryRun: false });
 
   const clientMsg =
     clientReg.updatedClients.length > 0

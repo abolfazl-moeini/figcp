@@ -45,6 +45,17 @@ describe("Code Connect & ui-level Addon", () => {
     }
   });
 
+  it("ignores malformed entries and leaves ambiguous suffixes unresolved", () => {
+    const map = {
+      "Buttons/Primary": { file: "src/buttons.tsx" },
+      "Actions/Primary": { file: "src/actions.tsx" },
+      "Broken/Primary": { file: "" },
+    } as unknown as Record<string, { file: string }>;
+    assert.equal(matchCodeConnect(map, "Primary"), undefined);
+    assert.equal(matchCodeConnect(map, "Buttons/Primary")?.file, "src/buttons.tsx");
+    assert.equal(matchCodeConnect(map, "Primary"), undefined);
+  });
+
   it("manages ui-level config persistence and non-intrusive detection", () => {
     const tempHome = mkdtempSync(join(tmpdir(), "figcp-uicfg-"));
     try {
@@ -62,6 +73,11 @@ describe("Code Connect & ui-level Addon", () => {
       // detectUiLevel returns boolean without crashing
       const detected = detectUiLevel();
       assert.equal(typeof detected, "boolean");
+
+      // dryRun does not mutate config.json
+      const dryRes = enableUiLevelAddon(tempHome, { dryRun: true, installPackage: true });
+      assert.equal(dryRes.ok, true);
+      assert.equal(getUiLevelConfig(tempHome).uiLevel, "declined");
     } finally {
       rmSync(tempHome, { recursive: true, force: true });
     }

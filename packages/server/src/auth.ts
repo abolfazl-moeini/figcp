@@ -1,10 +1,12 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
-export function resolveFigcpHome(override?: string): string {
-  return override || process.env.FIGCP_HOME || join(homedir(), ".figcp");
+export function resolveFigcpHome(override?: string, fallbackHomeDir?: string): string {
+  const envHome = process.env.FIGCP_HOME?.trim();
+  const raw = override?.trim() || envHome || join(fallbackHomeDir ?? homedir(), ".figcp");
+  return resolve(raw);
 }
 
 export function getOrCreateToken(homeDir?: string): string {
@@ -17,26 +19,48 @@ export function getOrCreateToken(homeDir?: string): string {
   }
   const tokenPath = join(dir, "token");
 
-  if (existsSync(tokenPath)) {
-    const existing = readFileSync(tokenPath, "utf8").trim();
-    if (/^[0-9a-f]{32}$/.test(existing)) {
-      try {
-        chmodSync(tokenPath, 0o600);
-      } catch {
-        // Ignore on platforms that do not support POSIX chmod
+  const readValidToken = (): string | null => {
+    if (!existsSync(tokenPath)) return null;
+    try {
+      const existing = readFileSync(tokenPath, "utf8").trim();
+      if (/^[0-9a-f]{32}$/.test(existing)) {
+        try {
+          chmodSync(tokenPath, 0o600);
+        } catch {
+          // Ignore on platforms that do not support POSIX chmod
+        }
+        return existing;
       }
-      return existing;
+    } catch {
+      // Ignore read races
     }
-  }
+    return null;
+  };
+
+  const valid = readValidToken();
+  if (valid) return valid;
 
   const token = randomBytes(16).toString("hex");
-  writeFileSync(tokenPath, `${token}\n`, { encoding: "utf8", mode: 0o600 });
   try {
-    chmodSync(tokenPath, 0o600);
-  } catch {
-    // Ignore on platforms that do not support POSIX chmod
+    writeFileSync(tokenPath, `${token}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    try {
+      chmodSync(tokenPath, 0o600);
+    } catch {
+      // Ignore on platforms that do not support POSIX chmod
+    }
+    return token;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+      const winner = readValidToken();
+      if (winner) return winner;
+      // Existing file was invalid; atomically replace via temp file
+      const tmpPath = `${tokenPath}.tmp.${process.pid}.${randomBytes(4).toString("hex")}`;
+      writeFileSync(tmpPath, `${token}\n`, { encoding: "utf8", mode: 0o600 });
+      renameSync(tmpPath, tokenPath);
+      return token;
+    }
+    throw err;
   }
-  return token;
 }
 
 export function validateAuthToken(provided: string | null | undefined, expected: string): boolean {

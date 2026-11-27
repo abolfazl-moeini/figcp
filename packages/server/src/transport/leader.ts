@@ -101,7 +101,23 @@ export class LeaderServer {
   async stop(): Promise<void> {
     this.bridge.closeAll();
     if (this.wss) {
-      await new Promise<void>((resolve) => this.wss!.close(() => resolve()));
+      for (const client of this.wss.clients) {
+        try {
+          client.close(1001, "Server shutting down");
+        } catch {
+          client.terminate();
+        }
+      }
+      await new Promise<void>((resolve) => {
+        const terminateTimer = setTimeout(() => {
+          for (const client of this.wss?.clients ?? []) client.terminate();
+        }, 250);
+        terminateTimer.unref?.();
+        this.wss!.close(() => {
+          clearTimeout(terminateTimer);
+          resolve();
+        });
+      });
       this.wss = null;
     }
     if (this.server) {

@@ -16,6 +16,7 @@ export class TransportNode {
   private readonly host: string;
   private readonly token: string;
   private readonly takeoverReconnectWaitMs: number;
+  private takeoverPromise: Promise<LeaderServer | null> | null = null;
 
   constructor(options: TransportNodeOptions) {
     this.activePort = options.port ?? Number(process.env.FIGCP_PORT ?? 1994);
@@ -77,8 +78,11 @@ export class TransportNode {
         if (promoted) {
           return promoted.bridge.listConnectedFiles();
         }
-        if (await this.follower.ping()) {
-          return await this.follower.listConnectedFiles();
+        const currentLeader = this.currentLeader();
+        if (currentLeader) return currentLeader.bridge.listConnectedFiles();
+        const follower = this.follower;
+        if (follower && await follower.ping()) {
+          return await follower.listConnectedFiles();
         }
         throw err;
       }
@@ -100,13 +104,18 @@ export class TransportNode {
       if (!alive) {
         const promoted = await this.attemptTakeover();
         if (promoted) {
-          if (promoted.bridge.listConnectedFiles().length === 0 && this.takeoverReconnectWaitMs > 0) {
+          if (this.takeoverReconnectWaitMs > 0) {
             await promoted.bridge.waitForConnection(options.fileKey, this.takeoverReconnectWaitMs);
           }
           return promoted.bridge.sendCommand(options);
         }
+        const currentLeader = this.currentLeader();
+        if (currentLeader) return currentLeader.bridge.sendCommand(options);
       }
-      return this.follower.sendCommand(options);
+      const follower = this.follower;
+      if (follower) return follower.sendCommand(options);
+      const currentLeader = this.currentLeader();
+      if (currentLeader) return currentLeader.bridge.sendCommand(options);
     }
     throw new Error("TransportNode is not started.");
   }
@@ -120,22 +129,36 @@ export class TransportNode {
   }
 
   private async attemptTakeover(): Promise<LeaderServer | null> {
+    if (this.leader) return this.leader;
+    if (this.takeoverPromise) return this.takeoverPromise;
     const candidate = new LeaderServer({
       port: this.activePort,
       host: this.host,
       token: this.token,
     });
-    try {
-      await candidate.start();
-      this.leader = candidate;
-      this.follower = null;
-      return candidate;
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "EADDRINUSE") {
-        throw err;
+    const promotion = (async () => {
+      try {
+        await candidate.start();
+        this.leader = candidate;
+        this.follower = null;
+        return candidate;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code !== "EADDRINUSE") {
+          throw err;
+        }
+        return null;
       }
-      return null;
+    })();
+    this.takeoverPromise = promotion;
+    try {
+      return await promotion;
+    } finally {
+      if (this.takeoverPromise === promotion) this.takeoverPromise = null;
     }
+  }
+
+  private currentLeader(): LeaderServer | null {
+    return this.leader;
   }
 }

@@ -15,6 +15,7 @@ interface PendingRequest {
   timer: ReturnType<typeof setTimeout>;
   fileKey: string;
   ws: WebSocket;
+  releaseQueue: () => void;
 }
 
 interface PluginConnection {
@@ -29,10 +30,13 @@ export interface PluginBridgeOptions {
 
 export class PluginBridge {
   private readonly connections = new Map<string, PluginConnection>();
+  private readonly preHelloSockets = new Set<WebSocket>();
   private readonly pending = new Map<string, PendingRequest>();
+  private readonly commandTails = new Map<string, Promise<void>>();
   private readonly connectionWaiters = new Set<() => void>();
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private readonly heartbeatIntervalMs: number;
+  private closed = false;
 
   constructor(options: PluginBridgeOptions = {}) {
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 30_000;
@@ -71,8 +75,22 @@ export class PluginBridge {
 
   attachSocket(ws: WebSocket): void {
     let boundFileKey: string | null = null;
+    this.preHelloSockets.add(ws);
+    const preHelloTimer = setTimeout(() => {
+      if (this.preHelloSockets.has(ws)) {
+        this.preHelloSockets.delete(ws);
+        try {
+          ws.close(1008, "Plugin hello timeout");
+        } catch {
+          ws.terminate();
+        }
+      }
+    }, 10_000);
+    preHelloTimer.unref?.();
 
     const cleanupSocket = (reason: string) => {
+      clearTimeout(preHelloTimer);
+      this.preHelloSockets.delete(ws);
       this.rejectPendingForSocket(ws, reason);
       if (boundFileKey) {
         const current = this.connections.get(boundFileKey);
@@ -123,6 +141,8 @@ export class PluginBridge {
         if (!res.success) return;
 
         const { fileKey, fileName, pageName, pluginVersion } = res.data;
+        clearTimeout(preHelloTimer);
+        this.preHelloSockets.delete(ws);
 
         // If this socket previously registered a different fileKey, clean up the old binding.
         if (boundFileKey && boundFileKey !== fileKey) {
@@ -168,23 +188,25 @@ export class PluginBridge {
           const rawId = (parsed as { id?: unknown }).id;
           if (typeof rawId === "string") {
             const pending = this.pending.get(rawId);
-            if (pending) {
+            if (pending?.ws === ws) {
               clearTimeout(pending.timer);
               this.pending.delete(rawId);
               pending.reject(
                 new Error(`Invalid rpc_response from plugin: ${res.error.issues[0]?.message ?? "schema mismatch"}`),
               );
+              pending.releaseQueue();
             }
           }
           return;
         }
 
         const pending = this.pending.get(res.data.id);
-        if (!pending) return;
+        if (!pending || pending.ws !== ws) return;
 
         clearTimeout(pending.timer);
         this.pending.delete(res.data.id);
         pending.resolve(res.data);
+        pending.releaseQueue();
       }
     });
 
@@ -198,6 +220,7 @@ export class PluginBridge {
   }
 
   async waitForConnection(fileKey: string | undefined, timeoutMs: number): Promise<boolean> {
+    if (this.closed) return false;
     if (fileKey ? this.connections.has(fileKey) : this.connections.size > 0) {
       return true;
     }
@@ -211,10 +234,10 @@ export class PluginBridge {
       timer.unref?.();
 
       const onConnect = () => {
-        if (fileKey ? this.connections.has(fileKey) : this.connections.size > 0) {
+        if (this.closed || (fileKey ? this.connections.has(fileKey) : this.connections.size > 0)) {
           clearTimeout(timer);
           this.connectionWaiters.delete(onConnect);
-          resolve(true);
+          resolve(!this.closed);
         }
       };
       this.connectionWaiters.add(onConnect);
@@ -278,30 +301,72 @@ export class PluginBridge {
     };
 
     return new Promise<RpcResponse>((resolve, reject) => {
+      let dispatched = false;
+      let settled = false;
+      let released = false;
+      const previous = this.commandTails.get(targetKey) ?? Promise.resolve();
+      let release!: () => void;
+      const barrier = new Promise<void>((done) => { release = done; });
+      const tail = previous.then(() => barrier);
+      this.commandTails.set(targetKey, tail);
+      const releaseQueue = () => {
+        if (released) return;
+        released = true;
+        release();
+        if (this.commandTails.get(targetKey) === tail) this.commandTails.delete(targetKey);
+      };
       const timer = setTimeout(() => {
-        this.pending.delete(id);
+        if (settled) return;
+        settled = true;
         reject(new Error(`RPC "${options.method}" timed out after ${timeoutMs}ms on file "${targetKey}".`));
+        // A queued request can be discarded safely. An active request holds the
+        // file queue until its reply or socket cleanup, so timed-out work cannot
+        // release later mutations into a worker that may still be busy.
+        if (!dispatched) releaseQueue();
       }, timeoutMs);
 
-      this.pending.set(id, { resolve, reject, timer, fileKey: targetKey, ws: conn.ws });
-
-      try {
-        conn.ws.send(JSON.stringify(request), (err) => {
-          if (err && this.pending.has(id)) {
-            clearTimeout(timer);
-            this.pending.delete(id);
-            reject(err);
+      void previous.then(() => {
+        if (settled) {
+          releaseQueue();
+          return;
+        }
+        const currentConn = this.connections.get(targetKey);
+        if (!currentConn || currentConn.ws.readyState !== currentConn.ws.OPEN) {
+          clearTimeout(timer);
+          settled = true;
+          reject(new Error(`WebSocket for file "${targetKey}" is not open.`));
+          releaseQueue();
+          return;
+        }
+        dispatched = true;
+        this.pending.set(id, { resolve, reject, timer, fileKey: targetKey, ws: currentConn.ws, releaseQueue });
+        try {
+          currentConn.ws.send(JSON.stringify(request), (err) => {
+            if (err && this.pending.has(id)) {
+              clearTimeout(timer);
+              this.pending.delete(id);
+              if (!settled) {
+                settled = true;
+                reject(err);
+              }
+              releaseQueue();
+            }
+          });
+        } catch (err) {
+          clearTimeout(timer);
+          this.pending.delete(id);
+          if (!settled) {
+            settled = true;
+            reject(err instanceof Error ? err : new Error(String(err)));
           }
-        });
-      } catch (err) {
-        clearTimeout(timer);
-        this.pending.delete(id);
-        reject(err instanceof Error ? err : new Error(String(err)));
-      }
+          releaseQueue();
+        }
+      });
     });
   }
 
   closeAll(): void {
+    this.closed = true;
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
@@ -314,6 +379,7 @@ export class PluginBridge {
     for (const [id, pending] of this.pending.entries()) {
       clearTimeout(pending.timer);
       pending.reject(new Error("Bridge shutting down"));
+      pending.releaseQueue();
       this.pending.delete(id);
     }
     for (const conn of this.connections.values()) {
@@ -324,6 +390,14 @@ export class PluginBridge {
       }
     }
     this.connections.clear();
+    for (const ws of this.preHelloSockets) {
+      try {
+        ws.close(1001, "Server shutting down");
+      } catch {
+        ws.terminate();
+      }
+    }
+    this.preHelloSockets.clear();
   }
 
   private rejectPendingForSocket(ws: WebSocket, reason: string): void {
@@ -331,6 +405,7 @@ export class PluginBridge {
       if (pending.ws === ws) {
         clearTimeout(pending.timer);
         pending.reject(new Error(reason));
+        pending.releaseQueue();
         this.pending.delete(id);
       }
     }

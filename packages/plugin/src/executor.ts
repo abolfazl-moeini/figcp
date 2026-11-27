@@ -37,7 +37,9 @@ export function safeSerialize(value: unknown, maxDepth = 6, seen = new WeakSet<o
   if (Array.isArray(value)) {
     if (seen.has(value)) return "[Circular]";
     seen.add(value);
-    return value.map((item) => safeSerialize(item, maxDepth - 1, seen));
+    const result = value.map((item) => safeSerialize(item, maxDepth - 1, seen));
+    seen.delete(value);
+    return result;
   }
 
   if (value instanceof Uint8Array) {
@@ -52,11 +54,13 @@ export function safeSerialize(value: unknown, maxDepth = 6, seen = new WeakSet<o
     // Collapse Figma SceneNode-like objects to compact descriptors so stray nodes
     // do not blow up JSON serialization or flood the MCP response.
     if (typeof obj.id === "string" && typeof obj.type === "string" && "parent" in obj) {
-      return {
+      const descriptor = {
         id: obj.id,
         name: typeof obj.name === "string" ? obj.name : undefined,
         type: obj.type,
       };
+      seen.delete(obj);
+      return descriptor;
     }
 
     const out: Record<string, unknown> = {};
@@ -66,6 +70,7 @@ export function safeSerialize(value: unknown, maxDepth = 6, seen = new WeakSet<o
         out[key] = serialized;
       }
     }
+    seen.delete(obj);
     return out;
   }
 
@@ -90,10 +95,11 @@ function formatLogArg(arg: unknown): string {
 interface ExecutionState {
   aborted: boolean;
   mutated: boolean;
+  checkpointAttempted: boolean;
 }
 
 const MUTATING_METHOD_RE =
-  /^(create|append|insert|remove|resize|set|add|combine|group|ungroup|delete|rename|boolean|flatten|detach|swap|commit|trigger)/i;
+  /^(create|append|insert|remove|resize|set|add|combine|group|ungroup|delete|rename|boolean|flatten|detach|swap|commit|trigger|clone|importComponentByKeyAsync)/i;
 
 function createGuardedFigmaProxy<T>(target: T, state: ExecutionState): T {
   if (typeof Proxy !== "function" || target === null || typeof target !== "object") {
@@ -235,7 +241,7 @@ export class SerialPluginExecutor {
     const shouldCommitUndo = options.commitUndo ?? true;
 
     const logs: LogEntry[] = [];
-    const state: ExecutionState = { aborted: false, mutated: false };
+    const state: ExecutionState = { aborted: false, mutated: false, checkpointAttempted: false };
     const origLog = console.log;
     const origWarn = console.warn;
     const origError = console.error;
@@ -299,9 +305,11 @@ export class SerialPluginExecutor {
       if (
         !state.aborted &&
         shouldCommitUndo &&
+        state.mutated &&
         figmaApi &&
         typeof (figmaApi as { commitUndo?: unknown }).commitUndo === "function"
       ) {
+        state.checkpointAttempted = true;
         (figmaApi as { commitUndo: () => void }).commitUndo();
       }
 
@@ -313,13 +321,14 @@ export class SerialPluginExecutor {
       };
     } catch (err) {
       if (
-        !state.aborted &&
         shouldCommitUndo &&
         state.mutated &&
+        !state.checkpointAttempted &&
         figmaApi &&
         typeof (figmaApi as { commitUndo?: unknown }).commitUndo === "function"
       ) {
         try {
+          state.checkpointAttempted = true;
           (figmaApi as { commitUndo: () => void }).commitUndo();
         } catch {
           // Ignore commitUndo errors on failure cleanup

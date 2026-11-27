@@ -79,9 +79,9 @@ npm run doctor    # verify local environment and bridge health
 | :--- | :--- | :--- |
 | `figma_status` | Core | Checks bridge health, role, connected Figma files, and tracks manual canvas edits (`manualChanges`). |
 | `inspect_design_system` | 1 & 2 | Reads Local Variables (resolved hex & aliases), Styles, Components, local fonts (`fontQuery`), or exports W3C DTCG tokens (`format: "dtcg"`). |
-| `run_figma_js` | 1 | Executes arbitrary Figma Plugin API JS in a serial queue with `figma` and `helpers` in scope, captures console/errors, and checkpoints undo. |
+| `run_figma_js` | 1 | Executes arbitrary Figma Plugin API JS in a serial queue with `figma` and `helpers` in scope, captures console/errors, and checkpoints detected mutations. |
 | `inspect_node_bounds` | 1 | Inspects node geometry, Auto Layout, bound tokens, deterministic DS/RTL linter issues, and returns inline PNG screenshot. |
-| `figma_undo` | 1 | Reverts the last checkpointed mutation (`action: "undo"`) or saves a named restore point (`action: "snapshot"`). |
+| `figma_undo` | 1 | Undoes the latest Figma document undo step (which may include intervening user edits), or saves a named restore point (`action: "snapshot"`). |
 | `get_design_context` | 2 | Extracts code-generation design context (computed CSS flexbox, fills, typography, shadows), matches `figcp.map.json` components, and optionally exports `ui-level` specs. |
 | `export_node_assets` | 2 | Exports node vector/icons as clean SVG or raster imagery as PNG inline or to `outputDir` (zero REST API dependency). |
 

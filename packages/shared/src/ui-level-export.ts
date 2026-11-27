@@ -52,7 +52,7 @@ export interface DesignContextNode {
   type: string;
   rect: { x: number; y: number; width: number; height: number };
   relativeRect?: { x: number; y: number; width: number; height: number };
-  layoutMode?: "NONE" | "HORIZONTAL" | "VERTICAL";
+  layoutMode?: "NONE" | "HORIZONTAL" | "VERTICAL" | "GRID";
   itemSpacing?: number;
   padding?: { top: number; right: number; bottom: number; left: number };
   alignItems?: string;
@@ -86,7 +86,7 @@ export interface DesignContextNode {
 
 function mapFontWeightToNumber(weight?: string): number | undefined {
   if (!weight) return undefined;
-  const w = weight.trim().toLowerCase();
+  const w = weight.trim().toLowerCase().replace(/[\s_-]+/g, "");
   const numeric = Number(w);
   if (Number.isFinite(numeric) && numeric >= 100 && numeric <= 1000) return numeric;
   if (w.includes("thin") || w.includes("hairline")) return 100;
@@ -121,6 +121,18 @@ function mapJustifyOrAlign(val?: string): string | undefined {
   return val.toLowerCase();
 }
 
+function inferTextDirection(text?: string): "ltr" | "rtl" | undefined {
+  if (!text) return undefined;
+  const hasArabic = /\p{Script=Arabic}/u.test(text) && Array.from(text).some((char) =>
+    /\p{Script=Arabic}/u.test(char) && /\p{Letter}/u.test(char),
+  );
+  const hasLatin = Array.from(text).some((char) =>
+    /\p{Script=Latin}/u.test(char) && /\p{Letter}/u.test(char),
+  );
+  if (hasArabic === hasLatin) return undefined;
+  return hasArabic ? "rtl" : "ltr";
+}
+
 /**
  * Converts rich DesignContext tree into the flat NormalizedSpec format
  * natively consumed by `ui-level` (NormalizedSpecSchema).
@@ -139,7 +151,7 @@ export function toUiLevelNormalizedSpec(
   function visit(node: DesignContextNode, rootOrigin: { x: number; y: number }): void {
     const styles: UiLevelStyleSpec = {};
 
-    if (node.layoutMode && node.layoutMode !== "NONE") {
+    if (node.layoutMode === "HORIZONTAL" || node.layoutMode === "VERTICAL") {
       styles.display = "flex";
       styles.flexDirection = node.layoutMode === "HORIZONTAL" ? "row" : "column";
       if (node.itemSpacing !== undefined && node.itemSpacing > 0) {
@@ -199,6 +211,9 @@ export function toUiLevelNormalizedSpec(
       }
       if (typeof node.typography.letterSpacing === "number") {
         styles.letterSpacing = node.typography.letterSpacing;
+      } else if (typeof node.typography.letterSpacing === "string" && node.typography.letterSpacing.endsWith("%") && node.typography.fontSize) {
+        const percentage = Number.parseFloat(node.typography.letterSpacing);
+        if (Number.isFinite(percentage)) styles.letterSpacing = (percentage / 100) * node.typography.fontSize;
       }
       if (primaryFill?.hex) {
         styles.color = primaryFill.hex;
@@ -211,12 +226,13 @@ export function toUiLevelNormalizedSpec(
       width: node.rect.width,
       height: node.rect.height,
     };
+    const direction = inferTextDirection(node.typography?.characters);
 
     nodes.push({
       id: node.id,
       figmaId: node.id,
       selector: `[data-figma-id="${node.id}"]`,
-      ...(node.typography?.textAlign === "RIGHT" ? { direction: "rtl" as const } : {}),
+      ...(direction ? { direction } : {}),
       rect: relRect,
       styles,
       ...(node.typography?.characters !== undefined ? { text: node.typography.characters } : {}),

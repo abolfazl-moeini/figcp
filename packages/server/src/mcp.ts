@@ -12,7 +12,7 @@ import {
   type RpcResponse,
 } from "@figcp/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { z } from "zod";
 import { resolveFigcpHome } from "./auth.ts";
@@ -28,15 +28,20 @@ function getCacheDir(): string {
   return dir;
 }
 
+const OWNED_SPILL_FILE_RE = /^[a-z0-9_]+-\d+-[a-z0-9]+\.json$/i;
+
 function pruneOldCache(cacheDir: string, maxFiles = 20, maxAgeMs = 24 * 60 * 60 * 1000) {
   try {
     const files = readdirSync(cacheDir);
     const now = Date.now();
     const stats: Array<{ path: string; mtime: number }> = [];
     for (const f of files) {
+      if (!OWNED_SPILL_FILE_RE.test(f)) continue;
       const p = join(cacheDir, f);
       try {
-        stats.push({ path: p, mtime: statSync(p).mtimeMs });
+        const st = lstatSync(p);
+        if (!st.isFile() || st.isSymbolicLink()) continue;
+        stats.push({ path: p, mtime: st.mtimeMs });
       } catch {
         // Ignore deleted/broken entries
       }
@@ -72,10 +77,11 @@ export function spillLargePayload(
   }
 
   const cacheDir = customCacheDir || getCacheDir();
-  pruneOldCache(cacheDir);
-  const fileName = `${toolName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+  const safeTool = toolName.replace(/[^a-z0-9_]/gi, "_");
+  const fileName = `${safeTool}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
   const filePath = join(cacheDir, fileName);
-  writeFileSync(filePath, json, "utf8");
+  writeFileSync(filePath, json, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  pruneOldCache(cacheDir);
 
   const preview =
     typeof payload === "object" && payload !== null
@@ -226,12 +232,12 @@ export function createFigcpMcpServer(transport: TransportNode): McpServer {
 
   server.tool(
     "run_figma_js",
-    "Execute arbitrary Figma Plugin API JavaScript inside the connected Figma Desktop file. Globals `figma` and `helpers` are in scope. Runs in a serial queue, captures console logs and stack traces, and checkpoints undo by default (pass commitUndo=false for read-only scripts).",
+    "Execute arbitrary Figma Plugin API JavaScript inside the connected Figma Desktop file. Globals `figma` and `helpers` are in scope. Runs in a serial queue, captures console logs and stack traces, and checkpoints detected mutations by default (pass commitUndo=false to opt out). Undo applies to Figma's latest undo step and can include intervening user edits.",
     {
       code: z.string().min(1).describe("Async JavaScript body with `figma` and `helpers` in scope. Return JSON-serializable data."),
       fileKey: z.string().optional().describe("Target Figma fileKey (required only when multiple Figma files are connected)."),
       timeoutMs: z.number().int().positive().max(180_000).optional().describe("Execution timeout in ms (default 30000, max 180000)."),
-      commitUndo: z.boolean().optional().describe("Call figma.commitUndo() on mutation (default true; pass false for read-only inspections)."),
+      commitUndo: z.boolean().optional().describe("Checkpoint detected mutations (default true; pass false to opt out)."),
     },
     async ({ code, fileKey, timeoutMs, commitUndo }) => {
       const response = await safeSendCommand(transport, {
@@ -407,7 +413,7 @@ export function createFigcpMcpServer(transport: TransportNode): McpServer {
 
   server.tool(
     "figma_undo",
-    "Revert the last checkpointed run_figma_js mutation (action='undo') or save a named Figma version history restore point (action='snapshot').",
+    "Undo the latest Figma document undo step (which may include intervening user edits), or save a named Figma version history restore point (action='snapshot').",
     {
       action: z.enum(["undo", "snapshot"]).optional().describe("'undo' (default) or 'snapshot'."),
       title: z.string().optional().describe("Snapshot title when action='snapshot'."),
@@ -509,21 +515,48 @@ export function createFigcpMcpServer(transport: TransportNode): McpServer {
 
       // 2. Export offline ui-level spec if requested
       let uiLevelExportPath: string | undefined;
+      let uiLevelImagePath: string | undefined;
       if (exportUiLevelDir) {
+        if (!rawResult.screenshotBase64) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    name: "ValidationError",
+                    message: "exportUiLevelDir requires a reference PNG screenshot (do not pass includeScreenshot=false).",
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+          };
+        }
         const destDir = resolve(exportUiLevelDir);
         mkdirSync(destDir, { recursive: true });
-        const hasPng = Boolean(rawResult.screenshotBase64);
-        if (rawResult.screenshotBase64) {
-          const refImgPath = join(destDir, "reference.png");
-          writeFileSync(refImgPath, Buffer.from(rawResult.screenshotBase64, "base64"));
-        }
+        const refImgPath = join(destDir, "reference.png");
+        const specPath = join(destDir, "spec.json");
         const spec = toUiLevelNormalizedSpec(rootNode, undefined, undefined, {
           deviceScaleFactor: effectiveScale,
-          ...(hasPng ? { imagePath: "reference.png" } : {}),
+          imagePath: "reference.png",
         });
-        const specPath = join(destDir, "spec.json");
-        writeFileSync(specPath, `${JSON.stringify(spec, null, 2)}\n`, "utf8");
+
+        writeFileSync(refImgPath, Buffer.from(rawResult.screenshotBase64, "base64"), { flag: "wx" });
+        try {
+          writeFileSync(specPath, `${JSON.stringify(spec, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+        } catch (err) {
+          try {
+            unlinkSync(refImgPath);
+          } catch {
+            // Best-effort rollback of staged screenshot
+          }
+          throw err;
+        }
         uiLevelExportPath = specPath;
+        uiLevelImagePath = refImgPath;
       }
 
       const uiLevelConfig = getUiLevelConfig();
@@ -533,10 +566,23 @@ export function createFigcpMcpServer(transport: TransportNode): McpServer {
         status: uiLevelConfig.uiLevel ?? "disabled",
         package: "ui-level (npm)",
         npmUrl: "https://www.npmjs.com/package/ui-level",
-        ...(uiLevelExportPath
+        ...(uiLevelExportPath && uiLevelImagePath
           ? {
               exportedSpecPath: uiLevelExportPath,
-              suggestedCommand: `npx ui-level check --spec ${uiLevelExportPath}`,
+              exportedImagePath: uiLevelImagePath,
+              suggestedArgs: [
+                "ui-level",
+                "check",
+                "--target",
+                "<url>",
+                "--adapter",
+                "figma",
+                "--ref-spec",
+                uiLevelExportPath,
+                "--ref-image",
+                uiLevelImagePath,
+              ],
+              suggestedCommand: `npx ui-level check --target <url> --adapter figma --ref-spec ${JSON.stringify(uiLevelExportPath)} --ref-image ${JSON.stringify(uiLevelImagePath)}`,
             }
           : {}),
       };
@@ -625,24 +671,68 @@ export function createFigcpMcpServer(transport: TransportNode): McpServer {
       }
 
       const res = parsedAsset.data;
+      if (res.format !== fmt) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  name: "ValidationError",
+                  message: `Asset format mismatch: requested ${fmt}, received ${res.format}.`,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
 
       if (outputDir) {
         const destDir = resolve(outputDir);
         mkdirSync(destDir, { recursive: true });
         const safeName = (filename || res.nodeName).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 50) || "asset";
         const ext = fmt === "PNG" ? "png" : "svg";
-        const targetPath = join(destDir, `${safeName}.${ext}`);
 
-        // Security check: ensure targetPath is strictly inside destDir
+        let targetPath = join(destDir, `${safeName}.${ext}`);
         const resolvedTarget = resolve(targetPath);
         if (resolvedTarget !== destDir && !resolvedTarget.startsWith(destDir + sep)) {
           throw new Error("Invalid output filename or path traversal detected.");
         }
 
-        if (fmt === "PNG") {
-          writeFileSync(targetPath, Buffer.from(res.content, "base64"));
-        } else {
-          writeFileSync(targetPath, res.content, "utf8");
+        const dataToWrite = fmt === "PNG" ? Buffer.from(res.content, "base64") : res.content;
+        const writeExclusive = (dest: string) => {
+          if (fmt === "PNG") {
+            writeFileSync(dest, dataToWrite as Buffer, { flag: "wx" });
+          } else {
+            writeFileSync(dest, dataToWrite as string, { encoding: "utf8", flag: "wx" });
+          }
+        };
+
+        try {
+          writeExclusive(targetPath);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "EEXIST" && !filename) {
+            let written = false;
+            for (let suffix = 2; suffix <= 50; suffix++) {
+              const candidate = join(destDir, `${safeName}_${suffix}.${ext}`);
+              try {
+                writeExclusive(candidate);
+                targetPath = candidate;
+                written = true;
+                break;
+              } catch (innerErr) {
+                if ((innerErr as NodeJS.ErrnoException).code !== "EEXIST") throw innerErr;
+              }
+            }
+            if (!written) {
+              throw new Error(`Could not allocate unique asset filename for "${safeName}.${ext}".`);
+            }
+          } else {
+            throw err;
+          }
         }
 
         return {
