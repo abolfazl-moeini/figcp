@@ -7,6 +7,8 @@ import { runDoctor } from "./cli/doctor.ts";
 import { runSetup } from "./cli/setup.ts";
 import { enableUiLevelAddon, getUiLevelConfig, setUiLevelConfig } from "./cli/ui-level-addon.ts";
 import { createFigcpMcpServer } from "./mcp.ts";
+import { WebCaptureManager } from "./web-capture/capture-manager.ts";
+import { generateFigmaImportScript } from "./web-capture/figma-builder.ts";
 import { TransportNode } from "./transport/node.ts";
 
 async function promptYesNo(question: string): Promise<boolean> {
@@ -37,11 +39,52 @@ async function main(): Promise<void> {
         "  figcp --install-skill  Install figcp SKILL.md to AI coding agents (~/.gemini or ~/.agents)",
         "  figcp --with-ui-level  Enable optional ui-level (npm: ui-level) verification integration",
         "  figcp --install-ui-level Install `ui-level` from npm globally and configure MCP clients",
+        "  figcp capture-web <url> Capture a web page and import into Figma",
         "  figcp --no-prompt      Skip optional interactive prompts during --setup",
         "  figcp --dry-run        Preview --setup changes without writing files",
         "  figcp --print-path     Print the Figma plugin manifest.json path",
       ].join("\n") + "\n",
     );
+    return;
+  }
+
+  if (args[0] === "capture-web") {
+    const restArgs = args.slice(1);
+    const cdpIdx = restArgs.indexOf("--cdp");
+    const cdpEndpoint = cdpIdx !== -1 ? restArgs[cdpIdx + 1] : undefined;
+    const captureStates = restArgs.includes("--states");
+    const targetUrl = restArgs.find((a, i) => !a.startsWith("--") && (cdpIdx === -1 || i !== cdpIdx + 1));
+
+    const token = getOrCreateToken();
+    const port = Number(process.env.FIGCP_PORT || "1994");
+    const node = new TransportNode({ port, token });
+    try {
+      process.stderr.write(`[figcp:capture-web] Connecting to browser CDP to capture ${targetUrl || "active tab"}...\n`);
+      const capture = await WebCaptureManager.captureWeb({ url: targetUrl, cdpEndpoint, captureStates });
+      process.stderr.write(
+        `[figcp:capture-web] Captured "${capture.title}" with ${Object.keys(capture.variables).length} variables and ${capture.fonts.length} fonts.\n`,
+      );
+      const script = generateFigmaImportScript(capture);
+
+      await node.start();
+      const resp = await node.sendCommand({
+        method: "run_figma_js",
+        params: { code: script },
+        timeoutMs: 60000,
+      });
+      if (!resp.ok) {
+        process.stderr.write(`[figcp:capture-web] Error from Figma plugin: ${resp.error?.message || "Unknown error"}\n`);
+        process.exitCode = 1;
+      } else {
+        process.stderr.write(`[figcp:capture-web] Successfully imported into Figma!\n`);
+        process.stdout.write(JSON.stringify(resp.result, null, 2) + "\n");
+      }
+    } catch (err) {
+      process.stderr.write(`[figcp:capture-web] Failed: ${(err as Error).message}\n`);
+      process.exitCode = 1;
+    } finally {
+      await node.stop();
+    }
     return;
   }
 

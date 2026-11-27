@@ -35,7 +35,7 @@ describe("MCP 7-tool server", () => {
     }
   });
 
-  it("exposes all 7 tools and returns native MCP image content + lintIssues", async () => {
+  it("exposes all tools (including import_web_to_figma) and returns native MCP image content + lintIssues", async () => {
     const transportNode = new TransportNode({ port: 0, token: TEST_TOKEN });
     await transportNode.start();
 
@@ -142,6 +142,7 @@ describe("MCP 7-tool server", () => {
         "figma_status",
         "figma_undo",
         "get_design_context",
+        "import_web_to_figma",
         "inspect_design_system",
         "inspect_node_bounds",
         "run_figma_js",

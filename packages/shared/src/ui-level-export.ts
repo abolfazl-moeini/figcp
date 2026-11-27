@@ -121,6 +121,13 @@ function mapJustifyOrAlign(val?: string): string | undefined {
   return val.toLowerCase();
 }
 
+function normalizeFontFamily(family?: string): string | undefined {
+  if (!family) return undefined;
+  const primary = family.split(",")[0]?.replace(/['"]/g, "").trim();
+  if (!primary) return undefined;
+  return primary.replace(/^__([a-zA-Z0-9\s-]+?)_[0-9a-f]{5,}$/i, "$1");
+}
+
 function inferTextDirection(text?: string): "ltr" | "rtl" | undefined {
   if (!text) return undefined;
   const hasArabic = /\p{Script=Arabic}/u.test(text) && Array.from(text).some((char) =>
@@ -195,8 +202,9 @@ export function toUiLevelNormalizedSpec(
     }
 
     if (node.typography) {
-      if (node.typography.fontFamily) {
-        styles.fontFamily = node.typography.fontFamily;
+      const normalizedFamily = normalizeFontFamily(node.typography.fontFamily);
+      if (normalizedFamily) {
+        styles.fontFamily = normalizedFamily;
       }
       if (typeof node.typography.fontSize === "number") {
         styles.fontSize = node.typography.fontSize;

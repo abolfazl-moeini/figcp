@@ -12,12 +12,15 @@ import {
   type RpcResponse,
 } from "@figcp/shared";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { existsSync, lstatSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { join, resolve, sep } from "node:path";
 import { z } from "zod";
 import { resolveFigcpHome } from "./auth.ts";
 import { detectUiLevel, getUiLevelConfig } from "./cli/ui-level-addon.ts";
 import { loadCodeConnectMap, matchCodeConnect } from "./code-connect.ts";
+import { WebCaptureManager } from "./web-capture/capture-manager.ts";
+import { generateFigmaImportScript } from "./web-capture/figma-builder.ts";
 import type { TransportNode } from "./transport/node.ts";
 
 function getCacheDir(): string {
@@ -544,14 +547,21 @@ export function createFigcpMcpServer(transport: TransportNode): McpServer {
           imagePath: "reference.png",
         });
 
-        writeFileSync(refImgPath, Buffer.from(rawResult.screenshotBase64, "base64"), { flag: "wx" });
+        const suffix = `${process.pid}.${randomBytes(4).toString("hex")}`;
+        const tmpImgPath = join(destDir, `.reference.png.tmp.${suffix}`);
+        const tmpSpecPath = join(destDir, `.spec.json.tmp.${suffix}`);
+        writeFileSync(tmpImgPath, Buffer.from(rawResult.screenshotBase64, "base64"), { flag: "wx" });
         try {
-          writeFileSync(specPath, `${JSON.stringify(spec, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+          writeFileSync(tmpSpecPath, `${JSON.stringify(spec, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+          renameSync(tmpImgPath, refImgPath);
+          renameSync(tmpSpecPath, specPath);
         } catch (err) {
-          try {
-            unlinkSync(refImgPath);
-          } catch {
-            // Best-effort rollback of staged screenshot
+          for (const tmp of [tmpImgPath, tmpSpecPath]) {
+            try {
+              unlinkSync(tmp);
+            } catch {
+              // Best-effort cleanup of staged temp files
+            }
           }
           throw err;
         }
@@ -775,6 +785,90 @@ export function createFigcpMcpServer(transport: TransportNode): McpServer {
           },
         ],
       };
+    },
+  );
+
+  // 8. import_web_to_figma: Live Web -> Figma Desktop generator
+  server.tool(
+    "import_web_to_figma",
+    "Captures a live web page or connected browser tab via CDP and imports it into Figma Desktop with Variables and Auto Layout.",
+    {
+      url: z.string().optional().describe("URL of the live web page to capture (or match among open browser tabs)."),
+      cdpEndpoint: z.string().optional().describe("Loopback CDP endpoint of the user's running browser (e.g. 127.0.0.1:9222)."),
+      fileKey: z.string().optional().describe("Target Figma file key if multiple files are open."),
+      width: z.number().optional().describe("Viewport width in CSS pixels (default: 1440)."),
+      height: z.number().optional().describe("Viewport height in CSS pixels (default: 900)."),
+      captureStates: z.boolean().optional().describe("Whether to click and capture interactive states like tabs/menus (default: false)."),
+    },
+    async ({ url, cdpEndpoint, fileKey, width, height, captureStates }) => {
+      try {
+        const capture = await WebCaptureManager.captureWeb({
+          url,
+          cdpEndpoint,
+          width,
+          height,
+          captureStates,
+        });
+
+        const script = generateFigmaImportScript(capture);
+        const resp = await transport.sendCommand({
+          method: "run_figma_js",
+          params: { code: script },
+          timeoutMs: 60000,
+          fileKey,
+        });
+
+        if (!resp.ok) {
+          return {
+            isError: true,
+            content: [{ type: "text", text: `Failed to import into Figma: ${resp.error?.message || "Unknown error"}` }],
+          };
+        }
+
+        // Phase 3.3: Automatic inspect_node_bounds + lintNodeTree check on the generated root frame
+        let lintIssues: ReturnType<typeof lintNodeTree> = [];
+        const rootId =
+          resp.result && typeof resp.result === "object" && "rootId" in resp.result
+            ? (resp.result as { rootId?: unknown }).rootId
+            : undefined;
+        if (typeof rootId === "string" && rootId.length > 0) {
+          try {
+            const boundsResp = await transport.sendCommand({
+              method: "inspect_node_bounds",
+              params: { nodeId: rootId, maxDepth: 4, includeScreenshot: false },
+              fileKey,
+              timeoutMs: 15_000,
+            });
+            if (boundsResp.ok && boundsResp.result) {
+              const parsedBounds = InspectNodeBoundsResultSchema.safeParse(boundsResp.result);
+              if (parsedBounds.success) {
+                lintIssues = lintNodeTree(parsedBounds.data.node);
+              }
+            }
+          } catch {
+            // Best-effort post-import lint check
+          }
+        }
+
+        const summary = {
+          success: true,
+          url: capture.url,
+          title: capture.title,
+          variablesImported: Object.keys(capture.variables).length,
+          fonts: capture.fonts.map((f) => f.family),
+          result: resp.result,
+          lintIssues,
+        };
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(summary, null, 2) }],
+        };
+      } catch (err) {
+        return {
+          isError: true,
+          content: [{ type: "text", text: `import_web_to_figma failed: ${(err as Error).message}` }],
+        };
+      }
     },
   );
 

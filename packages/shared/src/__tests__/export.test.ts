@@ -158,7 +158,7 @@ describe("DTCG & ui-level Cross-Contract Exporters", () => {
       children: [
         { id: "en", name: "English", type: "TEXT", rect: { x: 0, y: 0, width: 100, height: 20 }, typography: { characters: "Hello", textAlign: "RIGHT", fontWeight: "Extra Light", fontSize: 20, letterSpacing: "10%" } },
         { id: "fa", name: "Persian", type: "TEXT", rect: { x: 0, y: 30, width: 100, height: 20 }, typography: { characters: "سلام", textAlign: "CENTER", fontWeight: "Semi Bold", fontSize: 20, letterSpacing: "-5%" } },
-        { id: "mixed", name: "Mixed", type: "TEXT", rect: { x: 0, y: 60, width: 100, height: 20 }, typography: { characters: "سلام hello", textAlign: "RIGHT" } },
+        { id: "mixed", name: "Mixed", type: "TEXT", rect: { x: 0, y: 60, width: 100, height: 20 }, typography: { characters: "سلام hello", textAlign: "RIGHT", fontFamily: "'__Vazirmatn_a1b2c3', sans-serif" } },
       ],
     };
     const spec = toUiLevelNormalizedSpec(root);
@@ -169,5 +169,6 @@ describe("DTCG & ui-level Cross-Contract Exporters", () => {
     assert.equal(spec.nodes[2]?.styles.fontWeight, 600);
     assert.equal(spec.nodes[2]?.styles.letterSpacing, -1);
     assert.equal(spec.nodes[3]?.direction, undefined);
+    assert.equal(spec.nodes[3]?.styles.fontFamily, "Vazirmatn");
   });
 });
