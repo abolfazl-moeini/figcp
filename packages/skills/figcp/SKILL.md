@@ -58,6 +58,9 @@ Call `export_node_assets`:
 - Vector icons/illustrations: `format: "SVG"`, optional `outputDir: "src/assets/icons"`.
 - Complex graphics/photos: `format: "PNG"`, optional `outputDir: "src/assets/images"`.
 
+### Step 2b — Deterministic HTML/CSS Export
+Call `export_to_html` with an optional `nodeId` (defaults to the current selection) for a standalone HTML preview or fragment. It exports Auto Layout sizing, bound variable CSS custom properties, inline SVG icons, and Persian RTL direction. Large results (over 64 KB) and explicit `outputPath` requests are written to disk to keep MCP responses compact.
+
 ### Step 3 — Export DTCG Design Tokens (Optional)
 Call `inspect_design_system` with `format: "dtcg"`:
 - Returns standard W3C Design Tokens JSON.

@@ -26,7 +26,7 @@ function walkTsFiles(dir: string): string[] {
   return out;
 }
 
-describe("MCP 7-tool server", () => {
+describe("MCP 9-tool server", () => {
   it("contains zero console.log calls in packages/server/src (stdout hygiene)", () => {
     const srcRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
     for (const file of walkTsFiles(srcRoot)) {
@@ -122,6 +122,7 @@ describe("MCP 7-tool server", () => {
             logs: [],
           };
         }
+        if (req.method === "export_to_html") return { ok: true, result: { html: "<div>ok</div>", css: "", cssVariables: {}, stats: { nodeCount: 1, svgCount: 0, imageCount: 0, truncated: false }, warnings: [] }, logs: [] };
         return { ok: false, error: { name: "Error", message: "Unknown" }, logs: [] };
       },
     });
@@ -139,6 +140,7 @@ describe("MCP 7-tool server", () => {
       const names = listed.tools.map((t) => t.name).sort();
       assert.deepEqual(names, [
         "export_node_assets",
+        "export_to_html",
         "figma_status",
         "figma_undo",
         "get_design_context",
@@ -167,6 +169,10 @@ describe("MCP 7-tool server", () => {
         arguments: { nodeId: "100:1", format: "SVG" },
       });
       assert.equal(assetRes.isError ?? false, false);
+
+      const htmlRes = await client.callTool({ name: "export_to_html", arguments: { nodeId: "5031-4449" } });
+      assert.equal(htmlRes.isError ?? false, false);
+      assert.ok((htmlRes.content as Array<{ text: string }>)[0]!.text.includes("<div>ok</div>"));
 
       const statusRes = await client.callTool({ name: "figma_status", arguments: {} });
       assert.equal(statusRes.isError ?? false, false);
@@ -255,6 +261,9 @@ describe("MCP 7-tool server", () => {
       assert.equal(res.isError, true);
       const text = (res.content as Array<{ text: string }>)[0]!.text;
       assert.match(text, /ValidationError/);
+      const htmlRes=await client.callTool({name:"export_to_html",arguments:{}});
+      assert.equal(htmlRes.isError,true);
+      assert.match((htmlRes.content as Array<{text:string}>)[0]!.text,/ValidationError/);
     } finally {
       await client.close();
       await mcpServer.close();
@@ -290,6 +299,75 @@ describe("MCP 7-tool server", () => {
       if (previousCache === undefined) delete process.env.FIGCP_CACHE_DIR;
       else process.env.FIGCP_CACHE_DIR = previousCache;
       rmSync(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+  it("spills large HTML, normalizes nodeId, rejects directory outputPath, and writes explicit outputPath with fragment CSS", async () => {
+    const home = mkdtempSync(join(tmpdir(), "figcp-html-test-"));
+    const prev = process.env.FIGCP_HOME;
+    process.env.FIGCP_HOME = home;
+    const transportNode = new TransportNode({ port: 0, token: TEST_TOKEN });
+    await transportNode.start();
+    const seenNodeIds: Array<unknown> = [];
+    const plugin = new FakeFigmaPlugin({
+      port: transportNode.port,
+      token: TEST_TOKEN,
+      fileKey: "html",
+      fileName: "HTML",
+      onCommand: (req) => {
+        seenNodeIds.push(req.params.nodeId);
+        return {
+          ok: true,
+          result: {
+            html: req.params.maxNodes === 400 ? "x".repeat(66_000) : "<main>fragment</main>",
+            css: ".x { color: red; }",
+            cssVariables: {},
+            stats: { nodeCount: 1, svgCount: 0, imageCount: 0, truncated: false },
+            warnings: [],
+          },
+          logs: [],
+        };
+      },
+    });
+    const server = createFigcpMcpServer(transportNode);
+    const client = new Client({ name: "html-test", version: "1" });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    try {
+      await plugin.connect();
+      await server.connect(st);
+      await client.connect(ct);
+
+      const spilled = await client.callTool({ name: "export_to_html", arguments: { nodeId: "5031-4449" } });
+      assert.equal(spilled.isError ?? false, false);
+      assert.equal(seenNodeIds[0], "5031:4449");
+      const info = JSON.parse((spilled.content as Array<{ text: string }>)[0]!.text);
+      assert.equal(info.spilled, true);
+      assert.ok(readFileSync(info.filePath, "utf8").startsWith("x"));
+
+      const path = join(home, "out.html");
+      const saved = await client.callTool({
+        name: "export_to_html",
+        arguments: { mode: "fragment", outputPath: path, maxNodes: 399 },
+      });
+      assert.equal(saved.isError ?? false, false);
+      const savedInfo = JSON.parse((saved.content as Array<{ text: string }>)[0]!.text);
+      assert.equal(savedInfo.spilled, false);
+      assert.match(readFileSync(path, "utf8"), /^<style>\n\.x \{ color: red; \}\n<\/style>\n<main>fragment<\/main>$/);
+
+      const dirErr = await client.callTool({
+        name: "export_to_html",
+        arguments: { outputPath: home, maxNodes: 399 },
+      });
+      assert.equal(dirErr.isError, true);
+      assert.match((dirErr.content as Array<{ text: string }>)[0]!.text, /ValidationError/);
+    } finally {
+      await client.close();
+      await server.close();
+      await plugin.disconnect();
+      await transportNode.stop();
+      if (prev === undefined) delete process.env.FIGCP_HOME;
+      else process.env.FIGCP_HOME = prev;
+      rmSync(home, { recursive: true, force: true });
     }
   });
 });

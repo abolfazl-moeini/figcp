@@ -1,6 +1,7 @@
 import { type RpcRequest, type RpcResponse } from "@figcp/shared";
 import { SerialPluginExecutor } from "./executor.ts";
 import { createPluginHelpers } from "./helpers.ts";
+import { handleExportToHtml } from "./html-exporter.ts";
 import {
   handleExportNodeAssets,
   handleFigmaUndo,
@@ -299,6 +300,21 @@ figma.ui.onmessage = async (msg: unknown) => {
           logs: [],
           durationMs: Date.now() - startedAt,
         } satisfies RpcResponse);
+        return;
+      }
+
+      if (req.method === "export_to_html") {
+        const result = await executor.runTask(() => handleExportToHtml(figma, {
+          nodeId: typeof params.nodeId === "string" ? params.nodeId : undefined,
+          mode: params.mode === "fragment" ? "fragment" : "standalone",
+          useCssVars: typeof params.useCssVars === "boolean" ? params.useCssVars : undefined,
+          inlineSvgs: typeof params.inlineSvgs === "boolean" ? params.inlineSvgs : undefined,
+          inlineImages: typeof params.inlineImages === "boolean" ? params.inlineImages : undefined,
+          maxDepth: typeof params.maxDepth === "number" ? params.maxDepth : undefined,
+          maxNodes: typeof params.maxNodes === "number" ? params.maxNodes : undefined,
+          timeoutMs: req.timeoutMs,
+        }));
+        figma.ui.postMessage({ type: "rpc_response", id: req.id, ok: true, result, logs: [], durationMs: Date.now() - startedAt } satisfies RpcResponse);
         return;
       }
     } finally {

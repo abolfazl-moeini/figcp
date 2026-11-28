@@ -129,6 +129,8 @@ describe("E2E Closed-Loop Pipeline 1", () => {
               },
               logs: [],
             };
+          case "export_to_html":
+            return { ok: true, result: { html: "<div>exported</div>", css: "", cssVariables: {}, stats: { nodeCount: 1, svgCount: 0, imageCount: 0, truncated: false }, warnings: [] }, logs: [] };
           default:
             return { ok: false, error: { name: "Error", message: "Unexpected" }, logs: [] };
         }
@@ -191,6 +193,9 @@ describe("E2E Closed-Loop Pipeline 1", () => {
       });
       const assetSvg = (assetRes.content as Array<{ text: string }>)[0]!.text;
       assert.ok(assetSvg.includes("<svg>"));
+      const htmlRes = await client.callTool({ name: "export_to_html", arguments: { nodeId: "5031-4449" } });
+      assert.equal(htmlRes.isError ?? false, false);
+      assert.ok((htmlRes.content as Array<{ text: string }>)[0]!.text.includes("exported"));
     } finally {
       await client.close();
       await mcpServer.close();

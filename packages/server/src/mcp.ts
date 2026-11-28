@@ -2,6 +2,7 @@ import { lintNodeTree } from "@figcp/linter";
 import {
   DesignSystemSnapshotSchema,
   ExportNodeAssetsResultSchema,
+  ExportHtmlResultSchema,
   GetDesignContextResultSchema,
   InspectNodeBoundsResultSchema,
   normalizeNodeId,
@@ -14,7 +15,7 @@ import {
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { z } from "zod";
 import { resolveFigcpHome } from "./auth.ts";
 import { detectUiLevel, getUiLevelConfig } from "./cli/ui-level-addon.ts";
@@ -869,6 +870,118 @@ export function createFigcpMcpServer(transport: TransportNode): McpServer {
           content: [{ type: "text", text: `import_web_to_figma failed: ${(err as Error).message}` }],
         };
       }
+    },
+  );
+
+  server.tool(
+    "export_to_html",
+    "Deterministically export a selected Figma node subtree as clean HTML + CSS with :root CSS custom properties, Auto Layout overrides, inline SVG icons, and RTL support.",
+    {
+      nodeId: z.string().optional().describe("Target node ID ('5031:4449' or '5031-4449'). Defaults to current selection."),
+      fileKey: z.string().optional().describe("Target Figma fileKey when multiple files are connected."),
+      mode: z.enum(["standalone", "fragment"]).optional().default("standalone").describe("'standalone' full HTML document or 'fragment' snippet."),
+      useCssVars: z.boolean().optional().default(true).describe("Emit :root CSS custom properties for bound Figma variables."),
+      inlineSvgs: z.boolean().optional().default(true).describe("Embed inline <svg> for vector/icon assets."),
+      inlineImages: z.boolean().optional().default(false).describe("Embed base64 PNG data URLs for IMAGE fills (default false to keep payload compact)."),
+      maxDepth: z.number().int().min(0).max(15).optional().default(8).describe("Maximum DOM nesting depth (default 8)."),
+      maxNodes: z.number().int().min(1).max(2000).optional().default(400).describe("Maximum nodes to export (default 400)."),
+      outputPath: z.string().optional().describe("Optional .html file path to write exported HTML directly to disk."),
+    },
+    async ({ nodeId, fileKey, mode, useCssVars, inlineSvgs, inlineImages, maxDepth, maxNodes, outputPath }) => {
+      const normalized = nodeId ? normalizeNodeId(nodeId) : undefined;
+      const response = await safeSendCommand(transport, {
+        method: "export_to_html",
+        params: {
+          ...(normalized ? { nodeId: normalized } : {}),
+          mode,
+          useCssVars,
+          inlineSvgs,
+          inlineImages,
+          maxDepth,
+          maxNodes,
+        },
+        fileKey,
+      });
+      if (!response.ok) {
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: JSON.stringify(response.error, null, 2) }],
+        };
+      }
+      const parsed = ExportHtmlResultSchema.safeParse(response.result);
+      if (!parsed.success) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  name: "ValidationError",
+                  message: `Invalid export_to_html payload: ${parsed.error.issues[0]?.message ?? "schema mismatch"}`,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+      const res = parsed.data;
+      const fileContent = mode === "fragment" && res.css.trim() ? `<style>\n${res.css}\n</style>\n${res.html}` : res.html;
+      const payloadBytes = Buffer.byteLength(res.html, "utf8") + Buffer.byteLength(res.css, "utf8");
+      if (outputPath || payloadBytes > 65_536) {
+        const dest = outputPath
+          ? resolve(outputPath)
+          : join(
+              resolveFigcpHome(),
+              "exports",
+              `${(normalized || "selection").replace(/[^a-zA-Z0-9_-]/g, "_")}-${Date.now()}-${randomBytes(3).toString("hex")}.html`,
+            );
+        if (outputPath && existsSync(dest) && lstatSync(dest).isDirectory()) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text" as const,
+                text: JSON.stringify({ name: "ValidationError", message: "outputPath is a directory" }, null, 2),
+              },
+            ],
+          };
+        }
+        mkdirSync(dirname(dest), { recursive: true });
+        const tmp = `${dest}.${randomBytes(4).toString("hex")}.tmp`;
+        try {
+          writeFileSync(tmp, fileContent, { encoding: "utf8", mode: 0o600, flag: "wx" });
+          renameSync(tmp, dest);
+        } catch (e) {
+          try {
+            unlinkSync(tmp);
+          } catch {
+            // Best-effort temp cleanup
+          }
+          throw e;
+        }
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  spilled: !outputPath,
+                  filePath: dest,
+                  bytes: Buffer.byteLength(fileContent, "utf8"),
+                  stats: res.stats,
+                  warnings: res.warnings,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+      return { content: [{ type: "text" as const, text: JSON.stringify(res, null, 2) }] };
     },
   );
 

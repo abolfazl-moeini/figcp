@@ -2,16 +2,26 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   HttpRpcBodySchema,
+  ExportHtmlParamsSchema,
+  ExportHtmlResultSchema,
   InspectNodeBoundsResultSchema,
   NodeBoundsSummarySchema,
   normalizeNodeId,
   PingResponseSchema,
   PluginHelloMessageSchema,
   RpcRequestSchema,
+  RpcMethodSchema,
   RpcResponseSchema,
 } from "../protocol.ts";
 
 describe("@figcp/shared protocol", () => {
+  it("validates export_to_html RPC method, params defaults, bounds, and result schema", () => {
+    assert.equal(RpcMethodSchema.parse("export_to_html"), "export_to_html");
+    assert.deepEqual(ExportHtmlParamsSchema.parse({}), { mode: "standalone", useCssVars: true, inlineSvgs: true, inlineImages: false, maxDepth: 8, maxNodes: 400 });
+    for (const params of [{ maxDepth: 16 }, { maxDepth: -1 }, { maxNodes: 2001 }, { maxNodes: 0 }]) assert.throws(() => ExportHtmlParamsSchema.parse(params));
+    const result = ExportHtmlResultSchema.parse({ html: "<div>Hello</div>", css: ".n1 { color: #000; }", cssVariables: { "--surface-card": "#ffffff" }, stats: { nodeCount: 1, svgCount: 0, imageCount: 0, truncated: false }, warnings: [] });
+    assert.equal(result.stats.nodeCount, 1);
+  });
   it("parses valid PluginHelloMessage", () => {
     const parsed = PluginHelloMessageSchema.parse({
       type: "hello",

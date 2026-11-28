@@ -9,6 +9,7 @@ export const RpcMethodSchema = z.enum([
   "figma_status",
   "get_design_context",
   "export_node_assets",
+  "export_to_html",
 ]);
 
 export type RpcMethod = z.infer<typeof RpcMethodSchema>;
@@ -369,3 +370,23 @@ export const GetDesignContextResultSchema = z.object({
 });
 
 export { normalizeNodeId } from "./utils.ts";
+
+export const ExportHtmlParamsSchema = z.object({
+  nodeId: z.string().min(1).optional(),
+  mode: z.enum(["standalone", "fragment"]).default("standalone"),
+  useCssVars: z.boolean().default(true),
+  inlineSvgs: z.boolean().default(true),
+  inlineImages: z.boolean().default(false),
+  maxDepth: z.number().int().min(0).max(15).default(8),
+  maxNodes: z.number().int().min(1).max(2000).default(400),
+});
+export type ExportHtmlParams = z.input<typeof ExportHtmlParamsSchema>;
+export type ExportHtmlResolvedParams = z.output<typeof ExportHtmlParamsSchema>;
+export const ExportHtmlResultSchema = z.object({
+  html: z.string(),
+  css: z.string(),
+  cssVariables: z.record(z.string()),
+  stats: z.object({ nodeCount: z.number().int().nonnegative(), svgCount: z.number().int().nonnegative(), imageCount: z.number().int().nonnegative(), truncated: z.boolean() }),
+  warnings: z.array(z.string()),
+});
+export type ExportHtmlResult = z.infer<typeof ExportHtmlResultSchema>;
